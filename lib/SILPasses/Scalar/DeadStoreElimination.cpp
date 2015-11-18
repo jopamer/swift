@@ -881,7 +881,7 @@ void DSEContext::run() {
   for (SILBasicBlock &BB : *F) {
     // Create the stores that are alive.
     for (auto &I : getBBLocState(&BB)->LiveStores) {
-      SILInstruction *IT = cast<SILInstruction>(I.first)->getNextNode();
+      SILInstruction *IT = &*std::next(cast<SILInstruction>(I.first));
       SILBuilderWithScope<16> Builder(IT);
       Builder.createStore(I.first.getLoc().getValue(), I.second, I.first);
     }

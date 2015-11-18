@@ -391,6 +391,7 @@ withoutContext(TypeResolutionOptions options) {
 /// the OBJC_ATTR_SELECT macro in DiagnosticsSema.def.
 enum class ObjCReason {
   DoNotDiagnose,
+  ExplicitlyCDecl,
   ExplicitlyDynamic,
   ExplicitlyObjC,
   ExplicitlyIBOutlet,

@@ -742,6 +742,14 @@ ERROR(no_objc_tagged_pointer_not_class_protocol,sema_tcd,none,
 ERROR(swift_native_objc_runtime_base_not_on_root_class,sema_tcd,none,
       "@_swift_native_objc_runtime_base_not_on_root_class can only be applied "
       "to root classes", ())
+
+ERROR(cdecl_not_at_top_level,sema_tcd,none,
+      "@_cdecl can only be applied to global functions", ())
+ERROR(cdecl_empty_name,sema_tcd,none,
+      "@_cdecl symbol name cannot be empty", ())
+ERROR(cdecl_throws,sema_tcd,none,
+      "raising errors from @_cdecl functions is not supported", ())
+
 ERROR(attr_methods_only,sema_tcd,none,
       "only methods can be declared %0", (DeclAttribute))
 ERROR(access_control_in_protocol,sema_tcd,none,
@@ -2344,7 +2352,7 @@ ERROR(objc_name_func_mismatch,sema_objc,none,
       (bool, unsigned, bool, unsigned, bool, bool))
 
 // If you change this, also change enum ObjCReason
-#define OBJC_ATTR_SELECT "select{marked dynamic|marked @objc|marked @IBOutlet|marked @NSManaged|a member of an @objc protocol|implicitly @objc|an @objc override}"
+#define OBJC_ATTR_SELECT "select{marked @_cdecl|marked dynamic|marked @objc|marked @IBOutlet|marked @NSManaged|a member of an @objc protocol|implicitly @objc|an @objc override}"
 
 ERROR(objc_invalid_on_var,sema_objc,none,
       "property cannot be %" OBJC_ATTR_SELECT "0 "

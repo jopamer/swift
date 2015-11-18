@@ -246,7 +246,10 @@ SILLinkage SILDeclRef::getLinkage(ForDefinition_t forDefinition) const {
   
   // Currying and calling convention thunks have shared linkage.
   if (isThunk())
-    return SILLinkage::Shared;
+    // If a function declares a @_cdecl name, its native-to-foreign thunk is
+    // exported with the visibility of the function.
+    if (!isNativeToForeignThunk() || !d->getAttrs().hasAttribute<CDeclAttr>())
+      return SILLinkage::Shared;
   
   // Declarations imported from Clang modules have shared linkage.
   // FIXME: They shouldn't.
@@ -402,13 +405,20 @@ static void mangleConstant(SILDeclRef c, llvm::raw_ostream &buffer,
       return;
     }
 
-    // As a special case, functions can have external asm names.
-    // Use the asm name only for the original non-thunked, non-curried entry
+    // As a special case, functions can have manually mangled names.
+    // Use the SILGen name only for the original non-thunked, non-curried entry
     // point.
-    if (auto AsmA = c.getDecl()->getAttrs().getAttribute<SILGenNameAttr>())
+    if (auto NameA = c.getDecl()->getAttrs().getAttribute<SILGenNameAttr>())
       if (!c.isForeignToNativeThunk() && !c.isNativeToForeignThunk()
           && !c.isCurried) {
-        buffer << AsmA->Name;
+        buffer << NameA->Name;
+        return;
+      }
+      
+    // Use a given cdecl name for native-to-foreign thunks.
+    if (auto CDeclA = c.getDecl()->getAttrs().getAttribute<CDeclAttr>())
+      if (c.isNativeToForeignThunk()) {
+        buffer << CDeclA->Name;
         return;
       }
 

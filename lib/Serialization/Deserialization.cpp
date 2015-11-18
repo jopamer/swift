@@ -1797,6 +1797,14 @@ Decl *ModuleFile::getDecl(DeclID DID, Optional<DeclContext *> ForcedContext) {
         break;
       }
 
+      case decls_block::CDecl_DECL_ATTR: {
+        bool isImplicit;
+        serialization::decls_block::CDeclDeclAttrLayout::readRecord(
+            scratch, isImplicit);
+        Attr = new (ctx) CDeclAttr(blobData, isImplicit);
+        break;
+      }
+
       case decls_block::Alignment_DECL_ATTR: {
         bool isImplicit;
         unsigned alignment;

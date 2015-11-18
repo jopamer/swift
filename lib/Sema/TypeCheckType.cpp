@@ -2672,9 +2672,10 @@ bool TypeChecker::isRepresentableInObjC(
   if (auto *FD = dyn_cast<FuncDecl>(AFD)) {
     if (FD->isAccessor()) {
       // Accessors can only be @objc if the storage declaration is.
+      // Global computed properties may however @_cdecl their accessors.
       auto storage = FD->getAccessorStorageDecl();
       validateDecl(storage);
-      if (!storage->isObjC()) {
+      if (!storage->isObjC() && Reason != ObjCReason::ExplicitlyCDecl) {
         if (Diagnose) {
           auto error = FD->isGetter()
                     ? (isa<VarDecl>(storage) 
@@ -2730,7 +2731,7 @@ bool TypeChecker::isRepresentableInObjC(
 
   if (!isSpecialInit &&
       !isParamPatternRepresentableInObjC(*this, AFD,
-                                         AFD->getBodyParamPatterns()[1],
+                                         AFD->getBodyParamPatterns().back(),
                                          Reason)) {
     if (!Diagnose) {
       // Return as soon as possible if we are not producing diagnostics.
@@ -2866,7 +2867,7 @@ bool TypeChecker::isRepresentableInObjC(
     // If the selector did not provide an index for the error, find
     // the last parameter that is not a trailing closure.
     if (!foundErrorParameterIndex) {
-      const Pattern *paramPattern = AFD->getBodyParamPatterns()[1];
+      const Pattern *paramPattern = AFD->getBodyParamPatterns().back();
       if (auto *tuple = dyn_cast<TuplePattern>(paramPattern)) {
         errorParameterIndex = tuple->getNumElements();
         while (errorParameterIndex > 0 &&

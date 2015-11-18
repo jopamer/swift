@@ -42,7 +42,7 @@ const unsigned char MODULE_DOC_SIGNATURE[] = { 0xE2, 0x9C, 0xA8, 0x07 };
 
 /// Serialized module format major version number.
 ///
-/// Always 0 for Swift 1.0.
+/// Always 0 for Swift 1.x and 2.x.
 const uint16_t VERSION_MAJOR = 0;
 
 /// Serialized module format minor version number.
@@ -51,7 +51,7 @@ const uint16_t VERSION_MAJOR = 0;
 /// To ensure that two separate changes don't silently get merged into one
 /// in source control, you should also update the comment to briefly
 /// describe what change you made.
-const uint16_t VERSION_MINOR = 222; // Last change: @_fixed_layout
+const uint16_t VERSION_MINOR = 223; // Last change: @_cdecl
 
 using DeclID = Fixnum<31>;
 using DeclIDField = BCFixed<31>;
@@ -1203,6 +1203,13 @@ namespace decls_block {
     BCFixed<1>, // implicit flag
     BCBlob      // _silgen_name
   >;
+
+  using CDeclDeclAttrLayout = BCRecordLayout<
+    CDecl_DECL_ATTR,
+    BCFixed<1>, // implicit flag
+    BCBlob      // _silgen_name
+  >;
+
   
   using AlignmentDeclAttrLayout = BCRecordLayout<
     Alignment_DECL_ATTR,

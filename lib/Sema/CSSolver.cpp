@@ -819,6 +819,15 @@ static PotentialBindings getPotentialBindings(ConstraintSystem &cs,
     auto first = cs.simplifyType(constraint->getFirstType());
     auto second = cs.simplifyType(constraint->getSecondType());
 
+    if (auto firstTyvar = first->getAs<TypeVariableType>()) {
+      if (auto secondTyvar = second->getAs<TypeVariableType>()) {
+        if (cs.getRepresentative(firstTyvar) ==
+            cs.getRepresentative(secondTyvar)) {
+          break;
+        }
+      }
+    }
+
     Type type;
     AllowedBindingKind kind;
     if (first->getAs<TypeVariableType>() == typeVar) {
@@ -1237,6 +1246,9 @@ bool ConstraintSystem::solveRec(SmallVectorImpl<Solution> &solutions,
     solutions.push_back(std::move(solution));
     return false;
   }
+
+  // Contract the edges of the constraint graph.
+  CG.optimize();
 
   // Compute the connected components of the constraint graph.
   // FIXME: We're seeding typeVars with TypeVariables so that the

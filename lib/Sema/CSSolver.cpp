@@ -1045,6 +1045,19 @@ static bool tryTypeVariableBindings(
     // Try each of the bindings in turn.
     ++cs.solverState->NumTypeVariableBindings;
     bool sawFirstLiteralConstraint = false;
+
+    if (tc.getLangOpts().DebugConstraintSolver) {
+      auto &log = cs.getASTContext().TypeCheckerDebug->getStream();
+      log.indent(depth * 2) << "Active bindings: ";
+
+      for (auto binding : bindings) {
+        log << typeVar->getString() << " := "
+            << binding.BindingType->getString() << " ";
+      }
+
+      log <<"\n";
+    }
+
     for (auto binding : bindings) {
       auto type = binding.BindingType;
 
@@ -1059,8 +1072,8 @@ static bool tryTypeVariableBindings(
       if (tc.getLangOpts().DebugConstraintSolver) {
         auto &log = cs.getASTContext().TypeCheckerDebug->getStream();
         log.indent(depth * 2)
-          << "(trying " << typeVar->getString()
-          << " := " << type->getString() << "\n";
+          << "(trying " << typeVar->getString() << " := " << type->getString()
+          << "\n";
       }
 
       // Try to solve the system with typeVar := type
@@ -1199,7 +1212,8 @@ bool ConstraintSystem::solve(SmallVectorImpl<Solution> &solutions,
 
   // If there is more than one viable system, attempt to pick the best
   // solution.
-  if (solutions.size() > 1) {
+  auto size = solutions.size();
+  if (size > 1) {
     if (auto best = findBestSolution(solutions, /*minimize=*/false)) {
       if (*best != 0)
         solutions[0] = std::move(solutions[*best]);
@@ -1644,7 +1658,7 @@ bool ConstraintSystem::solveSimplified(
     ++solverState->NumDisjunctionTerms;
     if (TC.getLangOpts().DebugConstraintSolver) {
       auto &log = getASTContext().TypeCheckerDebug->getStream();
-      log.indent(solverState->depth * 2)
+      log.indent(solverState->depth)
         << "(assuming ";
       constraint->print(log, &TC.Context.SourceMgr);
       log << '\n';
@@ -1710,7 +1724,7 @@ bool ConstraintSystem::solveSimplified(
 
     if (TC.getLangOpts().DebugConstraintSolver) {
       auto &log = getASTContext().TypeCheckerDebug->getStream();
-      log.indent(solverState->depth * 2) << ")\n";
+      log.indent(solverState->depth) << ")\n";
     }
   }
 

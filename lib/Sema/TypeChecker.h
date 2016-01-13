@@ -453,6 +453,10 @@ public:
   /// This can't use CanTypes because typealiases may have more limited types
   /// than their underlying types.
   llvm::DenseMap<Type, Accessibility> TypeAccessibilityCache;
+
+  // Caches whether a given declaration is "as specialized" as another.
+  llvm::DenseMap<std::pair<ValueDecl*, ValueDecl*>, bool> 
+    specializedOverloadComparisonCache;
   
   // We delay validation of C and Objective-C type-bridging functions in the
   // standard library until we encounter a declaration that requires one. This

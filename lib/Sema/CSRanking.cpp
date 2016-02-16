@@ -81,6 +81,9 @@ void ConstraintSystem::increaseScore(ScoreKind kind) {
     case SK_EmptyExistentialConversion:
       log << "empty-existential conversion";
       break;
+    case SK_OptionalConversion:
+      log << "implicitly unwrapped optional to optional conversion";
+      break;
     }
     log << ")\n";
   }

@@ -839,6 +839,16 @@ static PotentialBindings getPotentialBindings(ConstraintSystem &cs,
     } else if (second->getAs<TypeVariableType>() == typeVar) {
       // Lower bound for this type variable.
       type = first;
+
+      // If we're binding an IUO to an type variable for the purpose of a 
+      // conversion, implicitly substitue an optional type for the IUO.
+      if (auto objectType = 
+                cs.lookThroughImplicitlyUnwrappedOptionalType(type)) {
+        if (constraint->getKind() == ConstraintKind::Conversion) {
+          type = OptionalType::get(objectType);
+        }
+      }
+
       kind = AllowedBindingKind::Supertypes;
     } else {
       // Can't infer anything.
@@ -976,9 +986,25 @@ static PotentialBindings getPotentialBindings(ConstraintSystem &cs,
       if (constraint->getKind() != ConstraintKind::Defaultable)
         continue;
 
-      result.Bindings.push_back({constraint->getSecondType(),
-                                 AllowedBindingKind::Exact,
-                                 None});
+      auto boundType = constraint->getSecondType();
+
+      // Rather than consier an IUO as a potential binding, instead consider
+      // both T and T?.
+      if (auto objectType = 
+                  cs.lookThroughImplicitlyUnwrappedOptionalType(boundType)) {
+        result.Bindings.push_back({objectType,
+                                   AllowedBindingKind::Exact,
+                                   None});
+
+        result.Bindings.push_back({OptionalType::get(objectType),
+                                   AllowedBindingKind::Exact,
+                                   None});
+
+      } else {
+        result.Bindings.push_back({boundType,
+                                   AllowedBindingKind::Exact,
+                                   None});
+      }
     }
   }
 

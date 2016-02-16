@@ -42,7 +42,7 @@ extension CIFilter {
     for (key, value) in elements {
       dict[key] = value
     }
-    self.init(name: name, withInputParameters: dict)
+    self.init(name: name!, withInputParameters: dict)
   }
 }
 
@@ -58,7 +58,7 @@ extension CISampler {
     // @objc(initWithImage:options:)
     //   init(image im: CIImage!,
     //        options dict: NSDictionary!)
-    self.init(image: im, options: dict as [NSObject: AnyObject])
+    self.init(image: im!, options: dict as [NSObject: AnyObject])
   }
 }
 #endif

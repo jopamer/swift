@@ -5178,6 +5178,14 @@ Expr *ExprRewriter::coerceToType(Expr *expr, Type toType,
     return new (tc.Context) MetatypeConversionExpr(expr, toMeta);
   }
 
+  // Implicit forcing of an IUO.
+  if (auto valueTy = fromType->getImplicitlyUnwrappedOptionalObjectType()) {
+    if (valueTy->isEqual(toType)) {
+      expr = coerceImplicitlyUnwrappedOptionalToValue(expr, valueTy, locator);
+      return coerceToType(expr, toType, locator);
+     }
+  }
+
   // Conversion to/from UnresolvedType.
   if (fromType->is<UnresolvedType>() || toType->is<UnresolvedType>())
     return new (tc.Context) UnresolvedTypeConversionExpr(expr, toType);

@@ -3621,8 +3621,12 @@ ConstraintSystem::simplifyRestrictedConstraint(ConversionRestrictionKind restric
   //   T $< U ===> T! $< U?
   // also:
   //   T <c U ===> T? <c U!
-  case ConversionRestrictionKind::OptionalToImplicitlyUnwrappedOptional:
   case ConversionRestrictionKind::ImplicitlyUnwrappedOptionalToOptional:
+    addContextualScore();
+    increaseScore(SK_OptionalConversion);
+    SWIFT_FALLTHROUGH;
+
+  case ConversionRestrictionKind::OptionalToImplicitlyUnwrappedOptional:
   case ConversionRestrictionKind::OptionalToOptional: {
     addContextualScore();
     assert(matchKind >= TypeMatchKind::Subtype);

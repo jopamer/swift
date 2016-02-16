@@ -1034,7 +1034,7 @@ extension String {
     if nsTokenRanges != nil {
       tokenRanges._setIfNonNil {
         (nsTokenRanges! as [AnyObject]).map {
-          self._range($0.rangeValue)
+          self._range($0.rangeValue!)
         }
       }
     }

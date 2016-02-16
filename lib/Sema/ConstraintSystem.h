@@ -438,6 +438,8 @@ enum ScoreKind {
   SK_Unavailable,
   /// A fix needs to be applied to the source.
   SK_Fix,
+  /// A conversion from T! to T?.
+  SK_OptionalConversion,  
   /// An implicit force of an implicitly unwrapped optional value.
   SK_ForceUnchecked,
   /// A user-defined conversion.

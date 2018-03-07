@@ -334,18 +334,33 @@ namespace {
   bool computeFavoredTypeForExpr(Expr *expr, ConstraintSystem &CS) {
     LinkedTypeInfo lti;
 
-    auto *TC = static_cast<TypeChecker*>(CS.DC->getASTContext().getLazyResolver());
-    if (TC->getLangOpts().CollectInferenceData) {
+    expr->walk(LinkedExprAnalyzer(lti, CS));
+
+    auto *TC = static_cast<TypeChecker*>(CS.DC->getASTContext()
+                                         .getLazyResolver());
+    if (TC->getLangOpts().CollectInferenceData &&
+        isa<BinaryExpr>(expr)) {
       const char *logPath = getenv("SWIFT_INFERENCE_LOG_PATH");
       assert(logPath && "SWIFT_INFERENCE_LOG_PATH has not been set");
       FILE *logFile = fopen(logPath, "a");
       assert(logFile && "Could not open inference log file");
-      fprintf(logFile, "Collecting type data...\n");
+      if (lti.haveIntLiteral) {
+        fprintf(logFile, "IntLiteral ");
+      }
+      if (lti.haveFloatLiteral) {
+        fprintf(logFile, "FloatLiteral ");
+      }
+      if (lti.haveStringLiteral) {
+        fprintf(logFile, "StringLiteral ");
+      }
+
+      for (auto collectedType : lti.collectedTypes) {
+        fprintf(logFile, "%s ", collectedType->getString().c_str());
+      }
+      fprintf(logFile, "\n");
+
       fclose(logFile);
-
     }
-
-    expr->walk(LinkedExprAnalyzer(lti, CS));
 
     // Link anonymous closure params of the same index.
     // TODO: As stated above, we should bucket these whilst collecting the

@@ -264,10 +264,12 @@ namespace {
       // In the case of a function application, we would have already captured
       // the return type during constraint generation, so there's no use in
       // looking any further.
-      if (isa<ApplyExpr>(expr) &&
-          !(isa<BinaryExpr>(expr) || isa<PrefixUnaryExpr>(expr) ||
-            isa<PostfixUnaryExpr>(expr))) {
-        return { false, expr };
+      if (auto AE = dyn_cast<ApplyExpr>(expr)) {
+        if(!(isa<BinaryExpr>(expr) || isa<PrefixUnaryExpr>(expr) ||
+           isa<PostfixUnaryExpr>(expr))) {
+          LTI.collectedTypes.insert(CS.getType(AE).getPointer());
+          return { false, expr };
+        }
       }
 
       if (isa<BinaryExpr>(expr)) {
@@ -344,20 +346,27 @@ namespace {
       assert(logPath && "SWIFT_INFERENCE_LOG_PATH has not been set");
       FILE *logFile = fopen(logPath, "a");
       assert(logFile && "Could not open inference log file");
+      auto printed = lti.collectedTypes.size() != 0;
       if (lti.haveIntLiteral) {
         fprintf(logFile, "IntLiteral, ");
+        printed = true;
       }
       if (lti.haveFloatLiteral) {
         fprintf(logFile, "FloatLiteral, ");
+        printed = true;
       }
       if (lti.haveStringLiteral) {
         fprintf(logFile, "StringLiteral, ");
+        printed = true;
       }
 
       for (auto collectedType : lti.collectedTypes) {
         fprintf(logFile, "%s, ", collectedType->getString().c_str());
       }
-      fprintf(logFile, "\n");
+
+      if (printed) {
+        fprintf(logFile, "\n");
+      }
 
       fclose(logFile);
     }

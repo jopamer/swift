@@ -345,17 +345,17 @@ namespace {
       FILE *logFile = fopen(logPath, "a");
       assert(logFile && "Could not open inference log file");
       if (lti.haveIntLiteral) {
-        fprintf(logFile, "IntLiteral ");
+        fprintf(logFile, "IntLiteral, ");
       }
       if (lti.haveFloatLiteral) {
-        fprintf(logFile, "FloatLiteral ");
+        fprintf(logFile, "FloatLiteral, ");
       }
       if (lti.haveStringLiteral) {
-        fprintf(logFile, "StringLiteral ");
+        fprintf(logFile, "StringLiteral, ");
       }
 
       for (auto collectedType : lti.collectedTypes) {
-        fprintf(logFile, "%s ", collectedType->getString().c_str());
+        fprintf(logFile, "%s, ", collectedType->getString().c_str());
       }
       fprintf(logFile, "\n");
 

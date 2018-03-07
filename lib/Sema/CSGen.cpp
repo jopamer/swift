@@ -342,30 +342,20 @@ namespace {
                                          .getLazyResolver());
     if (TC->getLangOpts().CollectInferenceData) {
       if (auto BE =  dyn_cast<BinaryExpr>(expr)) {
-        const char *logPath = getenv("SWIFT_INFERENCE_LOG_PATH");
-        assert(logPath && "SWIFT_INFERENCE_LOG_PATH has not been set");
-        FILE *logFile = fopen(logPath, "a");
-        assert(logFile && "Could not open inference log file");
         if (lti.haveIntLiteral) {
-          BE->inferenceLog.append("IntLiteral, ");
+          BE->inferenceLog.append("IntLiteral / ");
         }
         if (lti.haveFloatLiteral) {
-          BE->inferenceLog.append("FloatLiteral, ");
+          BE->inferenceLog.append("FloatLiteral / ");
         }
         if (lti.haveStringLiteral) {
-          BE->inferenceLog.append("StringLiteral, ");
+          BE->inferenceLog.append("StringLiteral / ");
         }
 
         for (auto collectedType : lti.collectedTypes) {
           BE->inferenceLog.append(collectedType->getString());
-          BE->inferenceLog.append(", ");
+          BE->inferenceLog.append(" / ");
         }
-
-        if (BE->inferenceLog.size()) {
-          fprintf(logFile, "%s\n", BE->inferenceLog.c_str());
-        }
-
-        fclose(logFile);
       }
     }
 

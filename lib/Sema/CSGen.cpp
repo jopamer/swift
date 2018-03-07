@@ -333,11 +333,16 @@ namespace {
   /// expression, attempt to derive a favored type for it.
   bool computeFavoredTypeForExpr(Expr *expr, ConstraintSystem &CS) {
     LinkedTypeInfo lti;
+
     auto *TC = static_cast<TypeChecker*>(CS.DC->getASTContext().getLazyResolver());
     if (TC->getLangOpts().CollectInferenceData) {
-      auto &log = CS.DC->getASTContext().TypeCheckerDebug->getStream();
-      log << "Collecting type data...\n";
-      CS.print(log);
+      const char *logPath = getenv("SWIFT_INFERENCE_LOG_PATH");
+      assert(logPath && "SWIFT_INFERENCE_LOG_PATH has not been set");
+      FILE *logFile = fopen(logPath, "a");
+      assert(logFile && "Could not open inference log file");
+      fprintf(logFile, "Collecting type data...\n");
+      fclose(logFile);
+
     }
 
     expr->walk(LinkedExprAnalyzer(lti, CS));

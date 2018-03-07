@@ -48,7 +48,7 @@ ConstraintGraph::lookupNode(TypeVariableType *typeVar) {
   auto &impl = typeVar->getImpl();
   if (auto nodePtr = impl.getGraphNode()) {
     assert(impl.getGraphIndex() < TypeVariables.size() && "Out-of-bounds index");
-    assert(TypeVariables[impl.getGraphIndex()] == typeVar && 
+    assert(TypeVariables[impl.getGraphIndex()] == typeVar &&
            "Type variable mismatch");
     return { *nodePtr, impl.getGraphIndex() };
   }
@@ -396,11 +396,11 @@ void ConstraintGraph::removeConstraint(Constraint *constraint) {
     Changes.push_back(Change::removedConstraint(constraint));
 }
 
-void ConstraintGraph::mergeNodes(TypeVariableType *typeVar1, 
+void ConstraintGraph::mergeNodes(TypeVariableType *typeVar1,
                                  TypeVariableType *typeVar2) {
   assert(CS.getRepresentative(typeVar1) == CS.getRepresentative(typeVar2) &&
          "type representatives don't match");
-  
+
   // Retrieve the node for the representative that we're merging into.
   auto typeVarRep = CS.getRepresentative(typeVar1);
   auto &repNode = (*this)[typeVarRep];
@@ -1120,5 +1120,3 @@ void ConstraintGraph::verify() {
 #undef requireWithContext
 #undef require
 }
-
-

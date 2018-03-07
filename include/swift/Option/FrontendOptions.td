@@ -164,6 +164,9 @@ def debug_forbid_typecheck_prefix : Separate<["-"], "debug-forbid-typecheck-pref
   HelpText<"Triggers llvm fatal_error if typechecker tries to typecheck a decl "
            "with the provided prefix name">;
 
+def collect_inference_data : Flag<["-"], "collect-inference-data">,
+  HelpText<"Collect type inference data for further analysis">;
+
 def debug_time_compilation : Flag<["-"], "debug-time-compilation">,
   HelpText<"Prints the time taken by each compilation phase">;
 def debug_time_function_bodies : Flag<["-"], "debug-time-function-bodies">,
@@ -275,14 +278,14 @@ def suppress_static_exclusivity_swap : Flag<["-"], "suppress-static-exclusivity-
 
 def enable_sil_opaque_values : Flag<["-"], "enable-sil-opaque-values">,
   HelpText<"Enable SIL Opaque Values">;
-  
+
 def enable_large_loadable_types : Flag<["-"], "enable-large-loadable-types">,
   HelpText<"Enable Large Loadable types IRGen pass">;
 
 def enable_experimental_property_behaviors :
   Flag<["-"], "enable-experimental-property-behaviors">,
   HelpText<"Enable experimental property behaviors">;
-  
+
 def enable_deserialization_recovery :
   Flag<["-"], "enable-deserialization-recovery">,
   HelpText<"Attempt to recover from missing xrefs (etc) in swiftmodules">;
@@ -453,7 +456,7 @@ def validate_tbd_against_ir_EQ: Joined<["-"], "validate-tbd-against-ir=">,
 // This is used to guard preemptive testing for the fix-it.
 def fix_string_substring_conversion: Flag<["-"], "fix-string-substring-conversion">,
     HelpText<"Emit a fix-it to append '[]' to String expressions when converting to Substring.">;
-    
+
 def bypass_batch_mode_checks: Flag<["-"], "bypass-batch-mode-checks">,
     HelpText<"Bypass checks for batch-mode errors.">;
 

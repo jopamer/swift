@@ -86,7 +86,7 @@ namespace swift {
 
     /// \brief Maximum number of typo corrections we are allowed to perform.
     unsigned TypoCorrectionLimit = 10;
-    
+
     /// Should access control be respected?
     bool EnableAccessControl = true;
 
@@ -170,6 +170,9 @@ namespace swift {
     /// identifier reference with the provided prefix name.
     /// This is for testing purposes.
     std::string DebugForbidTypecheckPrefix;
+
+    /// Collect data from inference step for further analysis.
+    bool CollectInferenceData = false;
 
     /// \brief The upper bound, in bytes, of temporary data that can be
     /// allocated by the constraint solver.
@@ -297,7 +300,7 @@ namespace swift {
     void clearAllPlatformConditionValues() {
       PlatformConditionValues.clear();
     }
-    
+
     /// Returns the value for the given platform condition or an empty string.
     StringRef getPlatformConditionValue(PlatformConditionKind Kind) const;
 

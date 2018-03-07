@@ -340,35 +340,33 @@ namespace {
 
     auto *TC = static_cast<TypeChecker*>(CS.DC->getASTContext()
                                          .getLazyResolver());
-    if (TC->getLangOpts().CollectInferenceData &&
-        isa<BinaryExpr>(expr)) {
-      const char *logPath = getenv("SWIFT_INFERENCE_LOG_PATH");
-      assert(logPath && "SWIFT_INFERENCE_LOG_PATH has not been set");
-      FILE *logFile = fopen(logPath, "a");
-      assert(logFile && "Could not open inference log file");
-      auto printed = lti.collectedTypes.size() != 0;
-      if (lti.haveIntLiteral) {
-        fprintf(logFile, "IntLiteral, ");
-        printed = true;
-      }
-      if (lti.haveFloatLiteral) {
-        fprintf(logFile, "FloatLiteral, ");
-        printed = true;
-      }
-      if (lti.haveStringLiteral) {
-        fprintf(logFile, "StringLiteral, ");
-        printed = true;
-      }
+    if (TC->getLangOpts().CollectInferenceData) {
+      if (auto BE =  dyn_cast<BinaryExpr>(expr)) {
+        const char *logPath = getenv("SWIFT_INFERENCE_LOG_PATH");
+        assert(logPath && "SWIFT_INFERENCE_LOG_PATH has not been set");
+        FILE *logFile = fopen(logPath, "a");
+        assert(logFile && "Could not open inference log file");
+        if (lti.haveIntLiteral) {
+          BE->inferenceLog.append("IntLiteral, ");
+        }
+        if (lti.haveFloatLiteral) {
+          BE->inferenceLog.append("FloatLiteral, ");
+        }
+        if (lti.haveStringLiteral) {
+          BE->inferenceLog.append("StringLiteral, ");
+        }
 
-      for (auto collectedType : lti.collectedTypes) {
-        fprintf(logFile, "%s, ", collectedType->getString().c_str());
-      }
+        for (auto collectedType : lti.collectedTypes) {
+          BE->inferenceLog.append(collectedType->getString());
+          BE->inferenceLog.append(", ");
+        }
 
-      if (printed) {
-        fprintf(logFile, "\n");
-      }
+        if (BE->inferenceLog.size()) {
+          fprintf(logFile, "%s\n", BE->inferenceLog.c_str());
+        }
 
-      fclose(logFile);
+        fclose(logFile);
+      }
     }
 
     // Link anonymous closure params of the same index.

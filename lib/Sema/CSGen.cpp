@@ -342,19 +342,29 @@ namespace {
                                          .getLazyResolver());
     if (TC->getLangOpts().CollectInferenceData) {
       if (auto BE =  dyn_cast<BinaryExpr>(expr)) {
-        if (lti.haveIntLiteral) {
-          BE->inferenceLog.append("IntLiteral / ");
-        }
-        if (lti.haveFloatLiteral) {
-          BE->inferenceLog.append("FloatLiteral / ");
-        }
-        if (lti.haveStringLiteral) {
-          BE->inferenceLog.append("StringLiteral / ");
-        }
+        // TODO: Need to collect info from repeat visits.
+        if (BE->inferenceLog.equals("")) {
+          if (lti.haveIntLiteral) {
+            BE->inferenceLog.append("\"IntLiteral\", ");
+          }
+          if (lti.haveFloatLiteral) {
+            BE->inferenceLog.append("\"FloatLiteral\", ");
+          }
+          if (lti.haveStringLiteral) {
+            BE->inferenceLog.append("\"StringLiteral\", ");
+          }
 
-        for (auto collectedType : lti.collectedTypes) {
-          BE->inferenceLog.append(collectedType->getString());
-          BE->inferenceLog.append(" / ");
+          size_t i = 0;
+          auto count = lti.collectedTypes.size();
+          for (auto collectedType : lti.collectedTypes) {
+            BE->inferenceLog.append("\"");
+            BE->inferenceLog.append(collectedType->getString());
+            BE->inferenceLog.append("\"");
+            if (i < count - 1) {
+              BE->inferenceLog.append(", ");
+            }
+            i++;
+          }
         }
       }
     }

@@ -7210,7 +7210,7 @@ Expr *ExprRewriter::finishApply(ApplyExpr *apply, Type openedType,
         assert(logFile && "Could not open inference log file");
 
         if (BE->inferenceLog.size()) {
-          fprintf(logFile, "%s :: %s\n",
+          fprintf(logFile, "\"%s\", %s\n",
                   fnType->getResult()->getString().c_str(),
                   BE->inferenceLog.c_str());
         }

@@ -172,7 +172,7 @@ namespace swift {
     std::string DebugForbidTypecheckPrefix;
 
     /// Collect data from inference step for further analysis.
-    bool CollectInferenceData = true;
+    bool CollectInferenceData = false;
 
     /// \brief The upper bound, in bytes, of temporary data that can be
     /// allocated by the constraint solver.

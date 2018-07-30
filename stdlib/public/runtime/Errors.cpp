@@ -171,7 +171,7 @@ void swift::dumpStackTraceEntry(unsigned index, void *framePC,
     fprintf(stderr, "%s`%s + %td", libraryName.data(), symbolName.c_str(),
             offset);
   } else {
-    constexpr const char *format = "%-4u %-34s 0x%0.16tx %s + %td\n";
+    constexpr const char *format = "%-4u %-34s 0x%0.16" PRIxPTR " %s + %td\n";
     fprintf(stderr, format, index, libraryName.data(), symbolAddr,
             symbolName.c_str(), offset);
   }
@@ -290,6 +290,12 @@ void _swift_runtime_on_report(uintptr_t flags, const char *message,
 void swift::_swift_reportToDebugger(uintptr_t flags, const char *message,
                                     RuntimeErrorDetails *details) {
   _swift_runtime_on_report(flags, message, details);
+}
+
+bool swift::_swift_reportFatalErrorsToDebugger = true;
+
+bool swift::_swift_shouldReportFatalErrorsToDebugger() {
+  return _swift_reportFatalErrorsToDebugger;
 }
 
 /// Report a fatal error to system console, stderr, and crash logs.

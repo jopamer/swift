@@ -233,7 +233,7 @@ public:
       return StoredPointer();
 
     auto classMeta = cast<TargetClassMetadata<Runtime>>(meta);
-    return classMeta->SuperClass;
+    return classMeta->Superclass;
   }
 
   /// Given a remote pointer to class metadata, attempt to discover its class
@@ -284,7 +284,6 @@ public:
         return BuiltType();
       return readNominalTypeFromMetadata(Meta, skipArtificialSubclasses);
     case MetadataKind::Struct:
-      return readNominalTypeFromMetadata(Meta);
     case MetadataKind::Enum:
     case MetadataKind::Optional:
       return readNominalTypeFromMetadata(Meta);
@@ -419,16 +418,20 @@ public:
       return BuiltExist;
     }
     case MetadataKind::ForeignClass: {
-      auto Foreign = cast<TargetForeignClassMetadata<Runtime>>(Meta);
+      auto descriptorAddr = readAddressOfNominalTypeDescriptor(Meta);
+      if (!descriptorAddr)
+        return BuiltType();
+      auto descriptor = readContextDescriptor(descriptorAddr);
+      if (!descriptor)
+        return BuiltType();
 
-      StoredPointer namePtr =
-        resolveRelativeField(Meta,
-                             asFullMetadata(Foreign)->Name);
-      if (namePtr == 0)
+      // Build the demangling tree from the context tree.
+      Demangle::NodeFactory nodeFactory;
+      auto node = buildNominalTypeMangling(descriptor, nodeFactory);
+      if (!node)
         return BuiltType();
-      std::string name;
-      if (!Reader->readString(RemoteAddress(namePtr), name))
-        return BuiltType();
+
+      auto name = Demangle::mangleNode(node);
       auto BuiltForeign = Builder.createForeignClassType(std::move(name));
       TypeCache[MetadataAddress] = BuiltForeign;
       return BuiltForeign;
@@ -438,7 +441,8 @@ public:
     case MetadataKind::ErrorObject:
       // Treat these all as Builtin.NativeObject for type lowering purposes.
       return Builder.createBuiltinType("Bo");
-    case MetadataKind::Opaque: {
+    case MetadataKind::Opaque:
+    default: {
       auto BuiltOpaque = Builder.getOpaqueType();
       TypeCache[MetadataAddress] = BuiltOpaque;
       return BuiltOpaque;
@@ -537,26 +541,109 @@ public:
   ///
   /// The offset is in units of words, from the start of the class's
   /// metadata.
-  llvm::Optional<uint32_t>
+  llvm::Optional<int32_t>
   readGenericArgsOffset(MetadataRef metadata,
                         ContextDescriptorRef descriptor) {
-    auto type = cast<TargetTypeContextDescriptor<Runtime>>(descriptor);
-    if (auto *classMetadata = dyn_cast<TargetClassMetadata<Runtime>>(metadata)){
-      if (classMetadata->SuperClass) {
-        auto superMetadata = readMetadata(classMetadata->SuperClass);
-        if (!superMetadata)
-          return llvm::None;
+    switch (descriptor->getKind()) {
+    case ContextDescriptorKind::Class: {
+      auto type = cast<TargetClassDescriptor<Runtime>>(descriptor);
 
-        auto result =
-          type->getGenericArgumentOffset(
-            classMetadata,
-            cast<TargetClassMetadata<Runtime>>(superMetadata));
+      if (!type->hasResilientSuperclass())
+        return type->getNonResilientGenericArgumentOffset();
 
-        return result;
-      }
+      auto bounds = readMetadataBoundsOfSuperclass(descriptor);
+      if (!bounds)
+        return llvm::None;
+
+      bounds->adjustForSubclass(type->areImmediateMembersNegative(),
+                                type->NumImmediateMembers);
+
+      return bounds->ImmediateMembersOffset / sizeof(StoredPointer);
     }
 
-    return type->getGenericArgumentOffset();
+    case ContextDescriptorKind::Enum: {
+      auto type = cast<TargetEnumDescriptor<Runtime>>(descriptor);
+      return type->getGenericArgumentOffset();
+    }
+
+    case ContextDescriptorKind::Struct: {
+      auto type = cast<TargetStructDescriptor<Runtime>>(descriptor);
+      return type->getGenericArgumentOffset();
+    }
+
+    default:
+      return llvm::None;
+    }
+  }
+
+  using ClassMetadataBounds = TargetClassMetadataBounds<Runtime>;
+
+  // This follows computeMetadataBoundsForSuperclass.
+  llvm::Optional<ClassMetadataBounds>
+  readMetadataBoundsOfSuperclass(ContextDescriptorRef subclassRef) {
+    auto subclass = cast<TargetClassDescriptor<Runtime>>(subclassRef);
+
+    auto rawSuperclass =
+      resolveNullableRelativeField(subclassRef, subclass->Superclass);
+    if (!rawSuperclass) {
+      return ClassMetadataBounds::forSwiftRootClass();
+    }
+
+    return forTypeReference<ClassMetadataBounds>(
+      subclass->getSuperclassReferenceKind(), *rawSuperclass,
+      [&](ContextDescriptorRef superclass)
+            -> llvm::Optional<ClassMetadataBounds> {
+        if (!isa<TargetClassDescriptor<Runtime>>(superclass))
+          return llvm::None;
+        return readMetadataBoundsOfSuperclass(superclass);
+      },
+      [&](MetadataRef metadata) -> llvm::Optional<ClassMetadataBounds> {
+        auto cls = dyn_cast<TargetClassMetadata<Runtime>>(metadata);
+        if (!cls)
+          return llvm::None;
+
+        return cls->getClassBoundsAsSwiftSuperclass();
+      });
+  }
+
+  template <class Result, class DescriptorFn, class MetadataFn>
+  llvm::Optional<Result>
+  forTypeReference(TypeMetadataRecordKind refKind, StoredPointer ref,
+                   const DescriptorFn &descriptorFn,
+                   const MetadataFn &metadataFn) {
+    switch (refKind) {
+    case TypeMetadataRecordKind::IndirectNominalTypeDescriptor: {
+      StoredPointer descriptorAddress = 0;
+      if (!Reader->readInteger(RemoteAddress(ref), &descriptorAddress))
+        return llvm::None;
+
+      ref = descriptorAddress;
+      LLVM_FALLTHROUGH;
+    }
+
+    case TypeMetadataRecordKind::DirectNominalTypeDescriptor: {
+      auto descriptor = readContextDescriptor(ref);
+      if (!descriptor)
+        return llvm::None;
+
+      return descriptorFn(descriptor);
+    }
+
+    case TypeMetadataRecordKind::IndirectObjCClass: {
+      StoredPointer classRef = 0;
+      if (!Reader->readInteger(RemoteAddress(ref), &classRef))
+        return llvm::None;
+
+      auto metadata = readMetadata(classRef);
+      if (!metadata)
+        return llvm::None;
+
+      return metadataFn(metadata);
+    }
+
+    default:
+      return llvm::None;
+    }
   }
 
   /// Read a single generic type argument from a bound generic type
@@ -838,8 +925,6 @@ protected:
         return _readMetadata<TargetMetatypeMetadata>(address);
       case MetadataKind::ObjCClassWrapper:
         return _readMetadata<TargetObjCClassWrapperMetadata>(address);
-      case MetadataKind::Opaque:
-        return _readMetadata<TargetOpaqueMetadata>(address);
       case MetadataKind::Optional:
         return _readMetadata<TargetEnumMetadata>(address);
       case MetadataKind::Struct:
@@ -860,6 +945,9 @@ protected:
 
         return _readMetadata(address, totalSize);
       }
+      case MetadataKind::Opaque:
+      default:
+        return _readMetadata<TargetOpaqueMetadata>(address);
     }
 
     // We can fall out here if the value wasn't actually a valid
@@ -898,9 +986,9 @@ private:
         // If this class has a null descriptor, it's artificial,
         // and we need to skip it upon request.  Otherwise, we're done.
         if (descriptorAddress || !skipArtificialSubclasses)
-          return static_cast<uintptr_t>(descriptorAddress);
+          return static_cast<StoredPointer>(descriptorAddress);
 
-        auto superclassMetadataAddress = classMeta->SuperClass;
+        auto superclassMetadataAddress = classMeta->Superclass;
         if (!superclassMetadataAddress)
           return 0;
 
@@ -921,7 +1009,12 @@ private:
     case MetadataKind::Optional:
     case MetadataKind::Enum: {
       auto valueMeta = cast<TargetValueMetadata<Runtime>>(metadata);
-      return reinterpret_cast<uintptr_t>(valueMeta->getDescription());
+      return valueMeta->getDescription();
+    }
+        
+    case MetadataKind::ForeignClass: {
+      auto foreignMeta = cast<TargetForeignClassMetadata<Runtime>>(metadata);
+      return foreignMeta->Description;
     }
 
     default:
@@ -959,15 +1052,21 @@ private:
     case ContextDescriptorKind::Anonymous:
       baseSize = sizeof(TargetAnonymousContextDescriptor<Runtime>);
       break;
+    case ContextDescriptorKind::Class:
+      baseSize = sizeof(TargetClassDescriptor<Runtime>);
+      genericHeaderSize = sizeof(TypeGenericContextDescriptorHeader);
+      hasVTable = TypeContextDescriptorFlags(flags.getKindSpecificFlags())
+                    .class_hasVTable();
+      break;
+    case ContextDescriptorKind::Enum:
+      baseSize = sizeof(TargetEnumDescriptor<Runtime>);
+      genericHeaderSize = sizeof(TypeGenericContextDescriptorHeader);
+      break;
+    case ContextDescriptorKind::Struct:
+      baseSize = sizeof(TargetStructDescriptor<Runtime>);
+      genericHeaderSize = sizeof(TypeGenericContextDescriptorHeader);
+      break;
     default:
-      if (kind >= ContextDescriptorKind::Type_First
-          && kind <= ContextDescriptorKind::Type_Last) {
-        baseSize = sizeof(TargetTypeContextDescriptor<Runtime>);
-        genericHeaderSize = sizeof(TypeGenericContextDescriptorHeader);
-        hasVTable = flags.getKindSpecificFlags()
-                     & (uint16_t)TypeContextDescriptorFlags::HasVTable;
-        break;
-      }
       // We don't know about this kind of context.
       return nullptr;
     }
@@ -1039,12 +1138,13 @@ private:
   Demangle::NodePointer
   buildNominalTypeMangling(ContextDescriptorRef descriptor,
                            Demangle::NodeFactory &nodeFactory) {
-    std::vector<std::pair<Demangle::Node::Kind, std::string>>
+    std::vector<std::pair<Demangle::Node::Kind, Demangle::NodePointer>>
       nameComponents;
     ContextDescriptorRef parent = descriptor;
     
     while (parent) {
       std::string nodeName;
+      std::string relatedTag;
       Demangle::Node::Kind nodeKind;
       
       auto getTypeName = [&]() -> bool {
@@ -1052,24 +1152,37 @@ private:
           reinterpret_cast<const TargetTypeContextDescriptor<Runtime> *>
             (parent.getLocalBuffer());
         auto nameAddress = resolveRelativeField(parent, typeBuffer->Name);
-        return Reader->readString(RemoteAddress(nameAddress), nodeName);
+        if (!Reader->readString(RemoteAddress(nameAddress), nodeName))
+          return false;
+        
+        if (typeBuffer->isSynthesizedRelatedEntity()) {
+          nameAddress += nodeName.size() + 1;
+          if (!Reader->readString(RemoteAddress(nameAddress), relatedTag))
+            return false;
+        }
+        
+        return true;
       };
       
+      bool isTypeContext = false;
       switch (auto contextKind = parent->getKind()) {
       case ContextDescriptorKind::Class:
         if (!getTypeName())
           return nullptr;
         nodeKind = Demangle::Node::Kind::Class;
+        isTypeContext = true;
         break;
       case ContextDescriptorKind::Struct:
         if (!getTypeName())
           return nullptr;
         nodeKind = Demangle::Node::Kind::Structure;
+        isTypeContext = true;
         break;
       case ContextDescriptorKind::Enum:
         if (!getTypeName())
           return nullptr;
         nodeKind = Demangle::Node::Kind::Enum;
+        isTypeContext = true;
         break;
 
       case ContextDescriptorKind::Extension:
@@ -1098,13 +1211,26 @@ private:
       }
 
       // Override the node kind if this was a Clang-imported type.
-      auto flags = parent->Flags.getKindSpecificFlags();
-      if (flags & (uint16_t)TypeContextDescriptorFlags::IsCTag)
-        nodeKind = Demangle::Node::Kind::Structure;
-      else if (flags & (uint16_t)TypeContextDescriptorFlags::IsCTypedef)
-        nodeKind = Demangle::Node::Kind::TypeAlias;
+      if (isTypeContext) {
+        auto typeFlags =
+          TypeContextDescriptorFlags(parent->Flags.getKindSpecificFlags());
 
-      nameComponents.emplace_back(nodeKind, nodeName);
+        if (typeFlags.isCTag())
+          nodeKind = Demangle::Node::Kind::Structure;
+        else if (typeFlags.isCTypedef())
+          nodeKind = Demangle::Node::Kind::TypeAlias;
+      }
+      
+      auto nameNode = nodeFactory.createNode(Node::Kind::Identifier,
+                                             nodeName);
+      if (!relatedTag.empty()) {
+        auto relatedNode =
+          nodeFactory.createNode(Node::Kind::RelatedEntityDeclName, relatedTag);
+        relatedNode->addChild(nameNode, nodeFactory);
+        nameNode = relatedNode;
+      }
+
+      nameComponents.emplace_back(nodeKind, nameNode);
       
       parent = readParentContextDescriptor(parent);
     }
@@ -1117,13 +1243,11 @@ private:
     auto moduleInfo = std::move(nameComponents.back());
     nameComponents.pop_back();
     auto demangling =
-      nodeFactory.createNode(Node::Kind::Module, moduleInfo.second);
+      nodeFactory.createNode(Node::Kind::Module, moduleInfo.second->getText());
     for (auto &component : reversed(nameComponents)) {
-      auto name = nodeFactory.createNode(Node::Kind::Identifier,
-                                         component.second);
       auto parent = nodeFactory.createNode(component.first);
       parent->addChild(demangling, nodeFactory);
-      parent->addChild(name, nodeFactory);
+      parent->addChild(component.second, nodeFactory);
       demangling = parent;
     }
     
@@ -1386,7 +1510,7 @@ private:
 namespace llvm {
   template<typename Runtime, typename T>
   struct simplify_type<swift::remote::RemoteRef<Runtime, T>> {
-    typedef const T *SimpleType;
+    using SimpleType = const T *;
     static SimpleType
     getSimplifiedValue(swift::remote::RemoteRef<Runtime, T> value) {
       return value.getLocalBuffer();

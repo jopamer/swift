@@ -232,7 +232,8 @@ function(_compile_swift_files
     list(APPEND swift_flags "-Xfrontend" "-sil-verify-all")
   endif()
 
-  if(SWIFT_STDLIB_ENABLE_RESILIENCE AND SWIFTFILE_IS_STDLIB)
+  # The standard library and overlays are always built with resilience.
+  if(SWIFTFILE_IS_STDLIB)
     list(APPEND swift_flags "-Xfrontend" "-enable-resilience")
   endif()
 
@@ -256,9 +257,9 @@ function(_compile_swift_files
                             "-Xfrontend" "${GROUP_INFO_JSON_FILE}")
   endif()
 
-  # Force swift 3 compatibility mode for Standard Library.
+  # Force swift 4 compatibility mode for Standard Library.
   if (SWIFTFILE_IS_STDLIB)
-    list(APPEND swift_flags "-swift-version" "3")
+    list(APPEND swift_flags "-swift-version" "4")
   endif()
   
   # Force swift 4 compatibility mode for overlays.

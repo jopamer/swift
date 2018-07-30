@@ -105,15 +105,19 @@ enum class CheckedCastKind : unsigned {
   Last_CheckedCastKind = Swift3BridgingDowncast,
 };
 
-enum class AccessSemantics : unsigned char {
-  /// On a property or subscript reference, this is a direct access to
-  /// the underlying storage.  On a function reference, this is a
-  /// non-polymorphic access to a particular implementation.
+/// What are the high-level semantics of this access?
+enum class AccessSemantics : uint8_t {
+  /// On a storage reference, this is a direct access to the underlying
+  /// physical storage, bypassing any observers.  The declaration must be 
+  /// a variable with storage.
+  ///
+  /// On a function reference, this is a non-polymorphic access to a
+  /// particular implementation.
   DirectToStorage,
 
-  /// On a property or subscript reference, this is a direct,
-  /// non-polymorphic access to the getter/setter accessors.
-  DirectToAccessor,
+  /// On a storage reference, this is a direct access to the concrete
+  /// implementation of this storage, bypassing any possibility of override.
+  DirectToImplementation,
 
   /// On a property or subscript reference, this is an access to a property
   /// behavior that may be an initialization. Reads always go through the
@@ -157,6 +161,10 @@ protected:
 
   SWIFT_INLINE_BITFIELD_EMPTY(LiteralExpr, Expr);
   SWIFT_INLINE_BITFIELD_EMPTY(IdentityExpr, Expr);
+  SWIFT_INLINE_BITFIELD(LookupExpr, Expr, 1,
+    IsSuper : 1
+  );
+  SWIFT_INLINE_BITFIELD_EMPTY(DynamicLookupExpr, LookupExpr);
 
   SWIFT_INLINE_BITFIELD(ParenExpr, IdentityExpr, 1,
     /// \brief Whether we're wrapping a trailing closure expression.
@@ -183,9 +191,8 @@ protected:
     FunctionRefKind : 2
   );
 
-  SWIFT_INLINE_BITFIELD(MemberRefExpr, Expr, 2+1,
-    Semantics : 2, // an AccessSemantics
-    IsSuper : 1
+  SWIFT_INLINE_BITFIELD(MemberRefExpr, LookupExpr, 2,
+    Semantics : 2 // an AccessSemantics
   );
 
   SWIFT_INLINE_BITFIELD_FULL(TupleElementExpr, Expr, 32,
@@ -211,9 +218,8 @@ protected:
     FunctionRefKind : 2
   );
 
-  SWIFT_INLINE_BITFIELD_FULL(SubscriptExpr, Expr, 2+1+16+1+1,
+  SWIFT_INLINE_BITFIELD_FULL(SubscriptExpr, LookupExpr, 2+1+1+16,
     Semantics : 2, // an AccessSemantics
-    IsSuper : 1,
     /// Whether the SubscriptExpr also has source locations for the argument
     /// label.
     HasArgLabelLocs : 1,
@@ -224,7 +230,7 @@ protected:
     NumArgLabels : 16
   );
 
-  SWIFT_INLINE_BITFIELD_FULL(DynamicSubscriptExpr, Expr, 1+1+16,
+  SWIFT_INLINE_BITFIELD_FULL(DynamicSubscriptExpr, DynamicLookupExpr, 1+1+16,
     /// Whether the DynamicSubscriptExpr also has source locations for the
     /// argument label.
     HasArgLabelLocs : 1,
@@ -404,7 +410,7 @@ public:
   Type getType() const { return Ty; }
 
   /// setType - Sets the type of this expression.
-  void setType(Type T) { Ty = T; }
+  void setType(Type T);
 
   /// \brief Return the source range of the expression.
   SourceRange getSourceRange() const;
@@ -460,13 +466,13 @@ public:
   /// Enumerate each immediate child expression of this node, invoking the
   /// specific functor on it.  This ignores statements and other non-expression
   /// children.
-  void forEachImmediateChildExpr(const std::function<Expr*(Expr*)> &callback);
+  void forEachImmediateChildExpr(llvm::function_ref<Expr *(Expr *)> callback);
 
   /// Enumerate each expr node within this expression subtree, invoking the
   /// specific functor on it.  This ignores statements and other non-expression
   /// children, and if there is a closure within the expression, this does not
   /// walk into the body of it (unless it is single-expression).
-  void forEachChildExpr(const std::function<Expr*(Expr*)> &callback);
+  void forEachChildExpr(llvm::function_ref<Expr *(Expr *)> callback);
 
   /// Determine whether this expression refers to a type by name.
   ///
@@ -548,6 +554,10 @@ public:
   /// a builtin operator.
   bool isInfixOperator() const;
 
+  /// Returns true if this is a reference to the implicit self of function.
+  bool isSelfExprOf(const AbstractFunctionDecl *AFD,
+                    bool sameBase = false) const;
+
   /// Produce a mapping from each subexpression to its parent
   /// expression, with the provided expression serving as the root of
   /// the parent map.
@@ -567,8 +577,22 @@ public:
   LLVM_ATTRIBUTE_DEPRECATED(
       void dump() const LLVM_ATTRIBUTE_USED,
       "only for use within the debugger");
+  LLVM_ATTRIBUTE_DEPRECATED(
+      void dump(llvm::function_ref<Type(const Expr *)> getType,
+                llvm::function_ref<Type(const TypeLoc &)> getTypeOfTypeLoc)
+          const LLVM_ATTRIBUTE_USED,
+      "only for use within the debugger");
+  LLVM_ATTRIBUTE_DEPRECATED(
+      void dump(raw_ostream &OS, llvm::function_ref<Type(const Expr *)> getType,
+                llvm::function_ref<Type(const TypeLoc &)> getTypeOfTypeLoc)
+          const LLVM_ATTRIBUTE_USED,
+      "only for use within the debugger");
+
   void dump(raw_ostream &OS) const;
   void print(raw_ostream &OS, unsigned Indent = 0) const;
+  void print(raw_ostream &OS, llvm::function_ref<Type(const Expr *)> getType,
+             llvm::function_ref<Type(const TypeLoc &)> getTypeOfTypeLoc,
+             unsigned Indent = 0) const;
   void print(ASTPrinter &Printer, const PrintOptions &Opts) const;
 
   // Only allow allocation of Exprs using the allocator in ASTContext
@@ -704,12 +728,19 @@ public:
 /// can help us preserve the context of the code completion position.
 class CodeCompletionExpr : public Expr {
   SourceRange Range;
+  bool Activated;
+
 public:
   CodeCompletionExpr(SourceRange Range, Type Ty = Type()) :
       Expr(ExprKind::CodeCompletion, /*Implicit=*/true, Ty),
-      Range(Range) {}
+      Range(Range) {
+    Activated = false;
+  }
 
   SourceRange getSourceRange() const { return Range; }
+
+  bool isActivated() const { return Activated; }
+  void setActivated() { Activated = true; }
 
   static bool classof(const Expr *E) {
     return E->getKind() == ExprKind::CodeCompletion;
@@ -810,8 +841,17 @@ public:
                           Val, DigitsLoc, Implicit)
   {}
 
+  /// Returns a new integer literal expression with the given value.
+  /// \p C The AST context.
+  /// \p value The integer value.
+  /// \return An implicit integer literal expression which evaluates to the value.
+  static IntegerLiteralExpr *
+  createFromUnsigned(ASTContext &C, unsigned value);
+
   APInt getValue() const;
   static APInt getValue(StringRef Text, unsigned BitWidth, bool Negative);
+
+  APInt getRawMagnitude() const;
 
   static bool classof(const Expr *E) {
     return E->getKind() == ExprKind::IntegerLiteral;
@@ -1470,15 +1510,59 @@ public:
   }
 };
 
+/// LookupExpr - This abstract class represents 'a.b', 'a[]', etc where we
+/// are referring to a member of a type, such as a property, variable, etc.
+class LookupExpr : public Expr {
+  Expr *Base;
+  ConcreteDeclRef Member;
+
+protected:
+  explicit LookupExpr(ExprKind Kind, Expr *base, ConcreteDeclRef member,
+                          bool Implicit)
+      : Expr(Kind, Implicit), Base(base), Member(member) {
+    Bits.LookupExpr.IsSuper = false;
+    assert(Base);
+  }
+
+public:
+  /// Retrieve the base of the expression.
+  Expr *getBase() const { return Base; }
+
+  /// Replace the base of the expression.
+  void setBase(Expr *E) { Base = E; }
+
+  /// Retrieve the member to which this access refers.
+  ConcreteDeclRef getMember() const { return Member; }
+
+  /// Determine whether the operation has a known underlying declaration or not.
+  bool hasDecl() const { return static_cast<bool>(Member); }
+  
+  /// Retrieve the declaration that this /// operation refers to.
+  /// Only valid when \c hasDecl() is true.
+  ConcreteDeclRef getDecl() const {
+    assert(hasDecl() && "No subscript declaration known!");
+    return getMember();
+  }
+
+  /// Determine whether this reference refers to the superclass's property.
+  bool isSuper() const { return Bits.LookupExpr.IsSuper; }
+
+  /// Set whether this reference refers to the superclass's property.
+  void setIsSuper(bool isSuper) { Bits.LookupExpr.IsSuper = isSuper; }
+
+  static bool classof(const Expr *E) {
+    return E->getKind() >= ExprKind::First_LookupExpr &&
+           E->getKind() <= ExprKind::Last_LookupExpr;
+  }
+};
+
 /// MemberRefExpr - This represents 'a.b' where we are referring to a member
 /// of a type, such as a property or variable.
 ///
 /// Note that methods found via 'dot' syntax are expressed as DotSyntaxCallExpr
 /// nodes, because 'a.f' is actually an application of 'a' (the implicit object
 /// argument) to the function 'f'.
-class MemberRefExpr : public Expr {
-  Expr *Base;
-  ConcreteDeclRef Member;
+class MemberRefExpr : public LookupExpr {
   SourceLoc DotLoc;
   DeclNameLoc NameLoc;
 
@@ -1486,30 +1570,19 @@ public:
   MemberRefExpr(Expr *base, SourceLoc dotLoc, ConcreteDeclRef member,
                 DeclNameLoc loc, bool Implicit,
                 AccessSemantics semantics = AccessSemantics::Ordinary);
-  Expr *getBase() const { return Base; }
-  ConcreteDeclRef getMember() const { return Member; }
-  DeclNameLoc getNameLoc() const { return NameLoc; }
   SourceLoc getDotLoc() const { return DotLoc; }
 
-  void setBase(Expr *E) { Base = E; }
-
+  DeclNameLoc getNameLoc() const { return NameLoc; }
+  
   /// Return true if this member access is direct, meaning that it
   /// does not call the getter or setter.
   AccessSemantics getAccessSemantics() const {
     return (AccessSemantics) Bits.MemberRefExpr.Semantics;
   }
 
-  /// Determine whether this member reference refers to the
-  /// superclass's property.
-  bool isSuper() const { return Bits.MemberRefExpr.IsSuper; }
-
-  /// Set whether this member reference refers to the superclass's
-  /// property.
-  void setIsSuper(bool isSuper) { Bits.MemberRefExpr.IsSuper = isSuper; }
-
   SourceLoc getLoc() const { return NameLoc.getBaseNameLoc(); }
   SourceLoc getStartLoc() const {
-    SourceLoc BaseStartLoc = Base->getStartLoc();
+    SourceLoc BaseStartLoc = getBase()->getStartLoc();
     if (BaseStartLoc.isInvalid() || NameLoc.isInvalid()) {
       return NameLoc.getBaseNameLoc();
     } else {
@@ -1528,24 +1601,12 @@ public:
 /// Common base for expressions that involve dynamic lookup, which
 /// determines at runtime whether a particular method, property, or
 /// subscript is available.
-class DynamicLookupExpr : public Expr {
+class DynamicLookupExpr : public LookupExpr {
 protected:
-  Expr *Base;
-  ConcreteDeclRef Member;
-
   explicit DynamicLookupExpr(ExprKind kind, ConcreteDeclRef member, Expr *base)
-    : Expr(kind, /*Implicit=*/false), Base(base), Member(member) { }
+    : LookupExpr(kind, base, member, /*Implicit=*/false) { }
 
 public:
-  /// Retrieve the member to which this access refers.
-  ConcreteDeclRef getMember() const { return Member; }
-
-  /// Retrieve the base of the expression.
-  Expr *getBase() const { return Base; }
-
-  /// Replace the base of the expression.
-  void setBase(Expr *base) { Base = base; }
-
   static bool classof(const Expr *E) {
     return E->getKind() >= ExprKind::First_DynamicLookupExpr &&
            E->getKind() <= ExprKind::Last_DynamicLookupExpr;
@@ -1588,7 +1649,7 @@ public:
   SourceLoc getLoc() const { return NameLoc.getBaseNameLoc(); }
 
   SourceLoc getStartLoc() const {
-    SourceLoc BaseStartLoc = Base->getStartLoc();
+    SourceLoc BaseStartLoc = getBase()->getStartLoc();
     if (BaseStartLoc.isInvalid() || NameLoc.isInvalid()) {
       return NameLoc.getBaseNameLoc();
     } else {
@@ -1656,12 +1717,6 @@ public:
                                       ConcreteDeclRef decl,
                                       bool implicit);
 
-  /// Retrieve the base of the expression.
-  Expr *getBase() const { return Base; }
-
-  /// Replace the base of the expression.
-  void setBase(Expr *base) { Base = base; }
-
   /// getIndex - Retrieve the index of the subscript expression, i.e., the
   /// "offset" into the base value.
   Expr *getIndex() const { return Index; }
@@ -1682,7 +1737,7 @@ public:
 
   SourceLoc getLoc() const { return Index->getStartLoc(); }
 
-  SourceLoc getStartLoc() const { return Base->getStartLoc(); }
+  SourceLoc getStartLoc() const { return getBase()->getStartLoc(); }
   SourceLoc getEndLoc() const { return Index->getEndLoc(); }
 
   static bool classof(const Expr *E) {
@@ -2210,12 +2265,10 @@ public:
 /// type-checked and well-formed subscript expression refers to a subscript
 /// declaration, which provides a getter and (optionally) a setter that will
 /// be used to perform reads/writes.
-class SubscriptExpr final : public Expr,
+class SubscriptExpr final : public LookupExpr,
                             public TrailingCallArguments<SubscriptExpr> {
   friend TrailingCallArguments;
 
-  ConcreteDeclRef TheDecl;
-  Expr *Base;
   Expr *Index;
 
   SubscriptExpr(Expr *base, Expr *index, ArrayRef<Identifier> argLabels,
@@ -2247,11 +2300,6 @@ public:
                                AccessSemantics semantics
                                  = AccessSemantics::Ordinary);
 
-  /// getBase - Retrieve the base of the subscript expression, i.e., the
-  /// value being indexed.
-  Expr *getBase() const { return Base; }
-  void setBase(Expr *E) { Base = E; }
-
   /// getIndex - Retrieve the index of the subscript expression, i.e., the
   /// "offset" into the base value.
   Expr *getIndex() const { return Index; }
@@ -2265,7 +2313,7 @@ public:
     return Bits.SubscriptExpr.HasArgLabelLocs;
   }
 
-  /// Whether this call with written with a trailing closure.
+  /// Whether this call was written with a trailing closure.
   bool hasTrailingClosure() const {
     return Bits.SubscriptExpr.HasTrailingClosure;
   }
@@ -2276,30 +2324,11 @@ public:
     return (AccessSemantics) Bits.SubscriptExpr.Semantics;
   }
 
-  /// Determine whether this member reference refers to the
-  /// superclass's property.
-  bool isSuper() const { return Bits.SubscriptExpr.IsSuper; }
-
-  /// Set whether this member reference refers to the superclass's
-  /// property.
-  void setIsSuper(bool isSuper) { Bits.SubscriptExpr.IsSuper = isSuper; }
-
-  /// Determine whether subscript operation has a known underlying
-  /// subscript declaration or not.
-  bool hasDecl() const { return static_cast<bool>(TheDecl); }
-
-  /// Retrieve the subscript declaration that this subscripting
-  /// operation refers to. Only valid when \c hasDecl() is true.
-  ConcreteDeclRef getDecl() const {
-    assert(hasDecl() && "No subscript declaration known!");
-    return TheDecl;
-  }
-
   SourceLoc getLoc() const { return Index->getStartLoc(); }
-  SourceLoc getStartLoc() const { return Base->getStartLoc(); }
+  SourceLoc getStartLoc() const { return getBase()->getStartLoc(); }
   SourceLoc getEndLoc() const {
     auto end = Index->getEndLoc();
-    return end.isValid() ? end : Base->getEndLoc();
+    return end.isValid() ? end : getBase()->getEndLoc();
   }
 
   static bool classof(const Expr *E) {
@@ -2340,11 +2369,16 @@ class UnresolvedDotExpr : public Expr {
   SourceLoc DotLoc;
   DeclNameLoc NameLoc;
   DeclName Name;
+  ArrayRef<ValueDecl *> OuterAlternatives;
+
 public:
-  UnresolvedDotExpr(Expr *subexpr, SourceLoc dotloc, DeclName name,
-                    DeclNameLoc nameloc, bool Implicit)
-    : Expr(ExprKind::UnresolvedDot, Implicit), SubExpr(subexpr), DotLoc(dotloc),
-      NameLoc(nameloc), Name(name) {
+  UnresolvedDotExpr(
+      Expr *subexpr, SourceLoc dotloc, DeclName name, DeclNameLoc nameloc,
+      bool Implicit,
+      ArrayRef<ValueDecl *> outerAlternatives = ArrayRef<ValueDecl *>())
+      : Expr(ExprKind::UnresolvedDot, Implicit), SubExpr(subexpr),
+        DotLoc(dotloc), NameLoc(nameloc), Name(name),
+        OuterAlternatives(outerAlternatives) {
     Bits.UnresolvedDotExpr.FunctionRefKind =
       static_cast<unsigned>(NameLoc.isCompound() ? FunctionRefKind::Compound
                                                  : FunctionRefKind::Unapplied);
@@ -2366,6 +2400,10 @@ public:
 
   DeclName getName() const { return Name; }
   DeclNameLoc getNameLoc() const { return NameLoc; }
+
+  ArrayRef<ValueDecl *> getOuterAlternatives() const {
+    return OuterAlternatives;
+  }
 
   /// Retrieve the kind of function reference.
   FunctionRefKind getFunctionRefKind() const {
@@ -4001,7 +4039,7 @@ public:
   }
 };
 
-/// PostfixUnaryExpr - Prefix unary expressions like '!y'.
+/// PostfixUnaryExpr - Postfix unary expressions like 'y!'.
 class PostfixUnaryExpr : public ApplyExpr {
 public:
   PostfixUnaryExpr(Expr *Fn, Expr *Arg, Type Ty = Type())
@@ -4582,6 +4620,28 @@ public:
   void setSemanticExpr(Expr *SE) { SemanticExpr = SE; }
 };
 
+/// A LazyInitializerExpr is used to embed an existing typechecked
+/// expression --- like the initializer of a lazy variable --- into an
+/// untypechecked AST.
+class LazyInitializerExpr : public Expr {
+  Expr *SubExpr;
+public:
+  LazyInitializerExpr(Expr *subExpr)
+    : Expr(ExprKind::LazyInitializer, /*implicit*/ true),
+      SubExpr(subExpr) {}
+
+  SourceRange getSourceRange() const { return SubExpr->getSourceRange(); }
+  SourceLoc getStartLoc() const { return SubExpr->getStartLoc(); }
+  SourceLoc getEndLoc() const { return SubExpr->getEndLoc(); }
+  SourceLoc getLoc() const { return SubExpr->getLoc(); }
+
+  Expr *getSubExpr() const { return SubExpr; }
+
+  static bool classof(const Expr *E) {
+    return E->getKind() == ExprKind::LazyInitializer;
+  }
+};
+
 /// Produces the Objective-C selector of the referenced method.
 ///
 /// \code
@@ -4898,7 +4958,7 @@ public:
       case Kind::OptionalForce:
       case Kind::UnresolvedProperty:
       case Kind::Property:
-        llvm_unreachable("no index expr for this kind");
+        return nullptr;
       }
     }
 
@@ -4931,7 +4991,7 @@ public:
       case Kind::OptionalForce:
       case Kind::UnresolvedProperty:
       case Kind::Property:
-        llvm_unreachable("no hashable conformances for this kind");
+        return {};
       }
     }
 

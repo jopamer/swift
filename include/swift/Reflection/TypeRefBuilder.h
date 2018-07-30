@@ -57,6 +57,10 @@ public:
   const void *startAddress() const {
     return Begin;
   }
+  
+  const void *endAddress() const {
+    return End;
+  }
 
   const_iterator begin() const {
     return const_iterator(Begin, End);
@@ -173,6 +177,11 @@ private:
   /// Cache for associated type lookups.
   std::unordered_map<TypeRefID, const TypeRef *,
                      TypeRefID::Hash, TypeRefID::Equal> AssociatedTypeCache;
+
+  /// Cache for field info lookups.
+  std::unordered_map<std::string,
+                     std::pair<const FieldDescriptor *, const ReflectionInfo *>>
+                     FieldTypeInfoCache;
 
   TypeConverter TC;
   MetadataSourceBuilder MSB;
@@ -333,6 +342,10 @@ public:
 
   void addReflectionInfo(ReflectionInfo I) {
     ReflectionInfos.push_back(I);
+  }
+  
+  const std::vector<ReflectionInfo> &getReflectionInfos() {
+    return ReflectionInfos;
   }
 
 private:

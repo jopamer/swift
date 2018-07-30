@@ -1,4 +1,4 @@
-// RUN: rm -rf %t ; mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: %target-build-swift %s -o %t/a.out3 -swift-version 3 && %target-run %t/a.out3
 // RUN: %target-build-swift %s -o %t/a.out4 -swift-version 4 && %target-run %t/a.out4
 
@@ -116,8 +116,6 @@ extension MyString : Hashable {
   }
 }
 
-#if _runtime(_ObjC)
-
 extension MyString {
   public func hasPrefix(_ prefix: String) -> Bool {
     return self.base.hasPrefix(prefix)
@@ -127,8 +125,6 @@ extension MyString {
     return self.base.hasSuffix(suffix)
   }
 }
-
-#endif
 
 extension MyString : StringProtocol {
   typealias UTF8Index = String.UTF8Index
@@ -283,8 +279,10 @@ Tests.test("Substring/Range/Slice/ExpectedType/\(swift)") {
   var sub = s[s.startIndex ..< s.endIndex]
   var subsub = sub[s.startIndex ..< s.endIndex]
 
-  expectType(ExpectedConcreteSlice.self, &sub)
-  expectType(ExpectedConcreteSlice.self, &subsub)
+  // slicing a String in Swift 3 produces a String
+  // but slicing a Substring should still produce a Substring
+  expectType(Substring.self, &sub)
+  expectType(Substring.self, &subsub)
 }
 
 Tests.test("Substring/ClosedRange/Slice/ExpectedType/\(swift)") {

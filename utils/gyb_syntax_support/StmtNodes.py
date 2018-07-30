@@ -12,6 +12,7 @@ STMT_NODES = [
 
     # while-stmt -> label? ':'? 'while' condition-list code-block ';'?
     Node('WhileStmt', kind='Stmt',
+         traits=['WithCodeBlock', 'Labeled'],
          children=[
              Child('LabelName', kind='IdentifierToken',
                    is_optional=True),
@@ -24,6 +25,7 @@ STMT_NODES = [
 
     # defer-stmt -> 'defer' code-block ';'?
     Node('DeferStmt', kind='Stmt',
+         traits=['WithCodeBlock'],
          children=[
              Child('DeferKeyword', kind='DeferToken'),
              Child('Body', kind='CodeBlock'),
@@ -37,10 +39,12 @@ STMT_NODES = [
 
     # switch-case-list -> switch-case switch-case-list?
     Node('SwitchCaseList', kind='SyntaxCollection',
-         element='SwitchCase'),
+         element='Syntax',
+         element_choices=['SwitchCase', 'IfConfigDecl']),
 
     # repeat-while-stmt -> label? ':'? 'repeat' code-block 'while' expr ';'?
     Node('RepeatWhileStmt', kind='Stmt',
+         traits=['WithCodeBlock', 'Labeled'],
          children=[
              Child('LabelName', kind='IdentifierToken',
                    is_optional=True),
@@ -54,6 +58,7 @@ STMT_NODES = [
 
     # guard-stmt -> 'guard' condition-list 'else' code-block ';'?
     Node('GuardStmt', kind='Stmt',
+         traits=['WithCodeBlock'],
          children=[
              Child('GuardKeyword', kind='GuardToken'),
              Child('Conditions', kind='ConditionElementList'),
@@ -70,6 +75,7 @@ STMT_NODES = [
     # for-in-stmt -> label? ':'? 'for' 'case'? pattern 'in' expr 'where'?
     #   expr code-block ';'?
     Node('ForInStmt', kind='Stmt',
+         traits=['WithCodeBlock', 'Labeled'],
          children=[
              Child('LabelName', kind='IdentifierToken',
                    is_optional=True),
@@ -91,6 +97,7 @@ STMT_NODES = [
     # switch-stmt -> identifier? ':'? 'switch' expr '{'
     #   switch-case-list '}' ';'?
     Node('SwitchStmt', kind='Stmt',
+         traits=['Braced', 'Labeled'],
          children=[
              Child('LabelName', kind='IdentifierToken',
                    is_optional=True),
@@ -98,9 +105,9 @@ STMT_NODES = [
                    is_optional=True),
              Child('SwitchKeyword', kind='SwitchToken'),
              Child('Expression', kind='Expr'),
-             Child('OpenBrace', kind='LeftBraceToken'),
+             Child('LeftBrace', kind='LeftBraceToken'),
              Child('Cases', kind='SwitchCaseList'),
-             Child('CloseBrace', kind='RightBraceToken'),
+             Child('RightBrace', kind='RightBraceToken'),
          ]),
 
     # catch-clause-list -> catch-clause catch-clause-list?
@@ -109,6 +116,7 @@ STMT_NODES = [
 
     # do-stmt -> identifier? ':'? 'do' code-block catch-clause-list ';'?
     Node('DoStmt', kind='Stmt',
+         traits=['WithCodeBlock', 'Labeled'],
          children=[
              Child('LabelName', kind='IdentifierToken',
                    is_optional=True),
@@ -151,6 +159,7 @@ STMT_NODES = [
     #            | case-condition
     #            | optional-binding-condition
     Node('ConditionElement', kind='Syntax',
+         traits=['WithTrailingComma'],
          children=[
              Child('Condition', kind='Syntax',
                    node_choices=[
@@ -164,10 +173,14 @@ STMT_NODES = [
              Child('TrailingComma', kind='CommaToken',
                    is_optional=True),
          ]),
+
+    # availability-condition -> '#available' '(' availability-spec ')'
     Node('AvailabilityCondition', kind='Syntax',
          children=[
              Child('PoundAvailableKeyword', kind='PoundAvailableToken'),
-             Child('Arguments', kind='TokenList'),
+             Child('LeftParen', kind='LeftParenToken'),
+             Child('AvailabilitySpec', kind='AvailabilitySpecList'),
+             Child('RightParen', kind='RightParenToken'),
          ]),
     Node('MatchingPatternCondition', kind='Syntax',
          children=[
@@ -211,6 +224,7 @@ STMT_NODES = [
     # if-stmt -> identifier? ':'? 'if' condition-list code-block
     #   else-clause ';'?
     Node('IfStmt', kind='Stmt',
+         traits=['WithCodeBlock', 'Labeled'],
          children=[
              Child('LabelName', kind='IdentifierToken',
                    is_optional=True),
@@ -237,17 +251,24 @@ STMT_NODES = [
 
     # else-clause -> 'else' code-block
     Node('ElseBlock', kind='Syntax',
+         traits=['WithCodeBlock'],
          children=[
              Child('ElseKeyword', kind='ElseToken'),
              Child('Body', kind='CodeBlock'),
          ]),
 
-    # switch-case -> switch-case-label stmt-list
-    #              | default-label stmt-list
+    # switch-case -> unknown-attr? switch-case-label stmt-list
+    #              | unknown-attr? switch-default-label stmt-list
     Node('SwitchCase', kind='Syntax',
+         traits=['WithStatements'],
          children=[
-             Child('Label', kind='Syntax'),
-             Child('Body', kind='CodeBlockItemList'),
+             Child('UnknownAttr', kind='Attribute', is_optional=True),
+             Child('Label', kind='Syntax',
+                   node_choices=[
+                       Child('Default', kind='SwitchDefaultLabel'),
+                       Child('Case', kind='SwitchCaseLabel'),
+                   ]),
+             Child('Statements', kind='CodeBlockItemList'),
          ]),
 
     # switch-default-label -> 'default' ':'
@@ -259,11 +280,12 @@ STMT_NODES = [
 
     # case-item -> pattern where-clause? ','?
     Node('CaseItem', kind='Syntax',
+         traits=['WithTrailingComma'],
          children=[
              Child('Pattern', kind='Pattern'),
              Child('WhereClause', kind='WhereClause',
                    is_optional=True),
-             Child('Comma', kind='CommaToken',
+             Child('TrailingComma', kind='CommaToken',
                    is_optional=True),
          ]),
 

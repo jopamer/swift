@@ -34,10 +34,10 @@ static SILValue emitConstructorMetatypeArg(SILGenFunction &SGF,
   Type metatype = ctor->getInterfaceType()->castTo<AnyFunctionType>()->getInput();
   auto *DC = ctor->getInnermostDeclContext();
   auto &AC = SGF.getASTContext();
-  auto VD = new (AC) ParamDecl(VarDecl::Specifier::Owned, SourceLoc(), SourceLoc(),
-                               AC.getIdentifier("$metatype"), SourceLoc(),
-                               AC.getIdentifier("$metatype"), Type(),
-                               DC);
+  auto VD =
+      new (AC) ParamDecl(VarDecl::Specifier::Default, SourceLoc(), SourceLoc(),
+                         AC.getIdentifier("$metatype"), SourceLoc(),
+                         AC.getIdentifier("$metatype"), Type(), DC);
   VD->setInterfaceType(metatype);
 
   SGF.AllocatorMetatype = SGF.F.begin()->createFunctionArgument(
@@ -57,20 +57,25 @@ static RValue emitImplicitValueConstructorArg(SILGenFunction &SGF,
     RValue tuple(type);
     for (auto fieldType : tupleTy.getElementTypes())
       tuple.addElement(emitImplicitValueConstructorArg(SGF, loc, fieldType, DC));
-
     return tuple;
-  } else {
-    auto &AC = SGF.getASTContext();
-    auto VD = new (AC) ParamDecl(VarDecl::Specifier::Owned, SourceLoc(), SourceLoc(),
-                                 AC.getIdentifier("$implicit_value"),
-                                 SourceLoc(),
-                                 AC.getIdentifier("$implicit_value"), Type(),
-                                 DC);
-    VD->setInterfaceType(interfaceType);
-    SILValue arg =
-        SGF.F.begin()->createFunctionArgument(SGF.getLoweredType(type), VD);
-    return RValue(SGF, loc, type, SGF.emitManagedRValueWithCleanup(arg));
   }
+
+  auto &AC = SGF.getASTContext();
+  auto VD = new (AC) ParamDecl(VarDecl::Specifier::Default, SourceLoc(), SourceLoc(),
+                               AC.getIdentifier("$implicit_value"),
+                               SourceLoc(),
+                               AC.getIdentifier("$implicit_value"), Type(),
+                               DC);
+  VD->setInterfaceType(interfaceType);
+  SILFunctionArgument *arg =
+      SGF.F.begin()->createFunctionArgument(SGF.getLoweredType(type), VD);
+  ManagedValue mvArg;
+  if (arg->getArgumentConvention().isOwnedConvention()) {
+    mvArg = SGF.emitManagedRValueWithCleanup(arg);
+  } else {
+    mvArg = ManagedValue::forUnmanaged(arg);
+  }
+  return RValue(SGF, loc, type, mvArg);
 }
 
 static void emitImplicitValueConstructor(SILGenFunction &SGF,
@@ -80,8 +85,8 @@ static void emitImplicitValueConstructor(SILGenFunction &SGF,
   // FIXME: Handle 'self' along with the other arguments.
   auto *paramList = ctor->getParameterList(1);
   auto *selfDecl = ctor->getImplicitSelfDecl();
-  auto selfTyCan = selfDecl->getType()->getInOutObjectType();
-  auto selfIfaceTyCan = selfDecl->getInterfaceType()->getInOutObjectType();
+  auto selfTyCan = selfDecl->getType();
+  auto selfIfaceTyCan = selfDecl->getInterfaceType();
   SILType selfTy = SGF.getLoweredType(selfTyCan);
 
   // Emit the indirect return argument, if any.
@@ -194,7 +199,7 @@ void SILGenFunction::emitValueConstructor(ConstructorDecl *ctor) {
 
   // Get the 'self' decl and type.
   VarDecl *selfDecl = ctor->getImplicitSelfDecl();
-  auto &lowering = getTypeLowering(selfDecl->getType()->getInOutObjectType());
+  auto &lowering = getTypeLowering(selfDecl->getType());
   SILType selfTy = lowering.getLoweredType();
   (void)selfTy;
   assert(!selfTy.getClassOrBoundGenericClass()
@@ -511,23 +516,22 @@ void SILGenFunction::emitClassConstructorAllocator(ConstructorDecl *ctor) {
 
   // Call the initializer.
   SubstitutionMap subMap;
-  SmallVector<Substitution, 4> subs;
   if (auto *genericEnv = ctor->getGenericEnvironmentOfContext()) {
     auto *genericSig = genericEnv->getGenericSignature();
-    subMap = genericSig->getSubstitutionMap(
+    subMap = SubstitutionMap::get(
+      genericSig,
       [&](SubstitutableType *t) -> Type {
         return genericEnv->mapTypeIntoContext(
           t->castTo<GenericTypeParamType>());
       },
       MakeAbstractConformanceForGenericType());
-    genericSig->getSubstitutions(subMap, subs);
   }
 
   std::tie(initVal, initTy)
     = emitSiblingMethodRef(Loc, selfValue, initConstant, subMap);
 
   SILValue initedSelfValue = emitApplyWithRethrow(Loc, initVal.forward(*this),
-                                                  initTy, subs, args);
+                                                  initTy, subMap, args);
 
   emitProfilerIncrement(ctor->getBody());
 
@@ -588,16 +592,18 @@ void SILGenFunction::emitClassConstructorInitializer(ConstructorDecl *ctor) {
 
   // Emit the prolog for the non-self arguments.
   // FIXME: Handle self along with the other body patterns.
-  emitProlog(ctor->getParameterList(1),
-             TupleType::getEmpty(F.getASTContext()), ctor, ctor->hasThrows());
+  uint16_t ArgNo = emitProlog(ctor->getParameterList(1),
+                              TupleType::getEmpty(F.getASTContext()), ctor,
+                              ctor->hasThrows());
 
   SILType selfTy = getLoweredLoadableType(selfDecl->getType());
-  ManagedValue selfArg = B.createFunctionArgument(selfTy, selfDecl);
+  ManagedValue selfArg = B.createInputFunctionArgument(selfTy, selfDecl);
 
   if (!NeedsBoxForSelf) {
     SILLocation PrologueLoc(selfDecl);
     PrologueLoc.markAsPrologue();
-    B.createDebugValue(PrologueLoc, selfArg.getValue());
+    SILDebugVariable DbgVar(selfDecl->isLet(), ++ArgNo);
+    B.createDebugValue(PrologueLoc, selfArg.getValue(), DbgVar);
   }
 
   if (!ctor->hasStubImplementation()) {
@@ -776,25 +782,21 @@ void SILGenFunction::emitClassConstructorInitializer(ConstructorDecl *ctor) {
 
 static ManagedValue emitSelfForMemberInit(SILGenFunction &SGF, SILLocation loc,
                                           VarDecl *selfDecl) {
-  CanType selfFormalType = selfDecl->getType()
-      ->getInOutObjectType()->getCanonicalType();
+  CanType selfFormalType = selfDecl->getType()->getCanonicalType();
   if (selfFormalType->hasReferenceSemantics())
-    return SGF.emitRValueForDecl(loc, selfDecl, selfDecl->getType(),
+    return SGF.emitRValueForDecl(loc, selfDecl, selfFormalType,
                                  AccessSemantics::DirectToStorage,
                                  SGFContext::AllowImmediatePlusZero)
       .getAsSingleValue(SGF, loc);
   else
-    return SGF.emitLValueForDecl(loc, selfDecl,
-                                 selfDecl->getType()->getCanonicalType(),
-                                 AccessKind::Write,
-                                 AccessSemantics::DirectToStorage);
+    return SGF.emitAddressOfLocalVarDecl(loc, selfDecl, selfFormalType,
+                                         AccessKind::Write);
 }
 
 static LValue emitLValueForMemberInit(SILGenFunction &SGF, SILLocation loc,
                                       VarDecl *selfDecl,
                                       VarDecl *property) {
-  CanType selfFormalType = selfDecl->getType()
-    ->getInOutObjectType()->getCanonicalType();
+  CanType selfFormalType = selfDecl->getType()->getCanonicalType();
   auto self = emitSelfForMemberInit(SGF, loc, selfDecl);
   return SGF.emitPropertyLValue(loc, self, selfFormalType, property,
                                 LValueOptions(), AccessKind::Write,
@@ -879,10 +881,10 @@ static SILValue getBehaviorInitStorageFn(SILGenFunction &SGF,
     
     auto initConstantTy = initFn->getLoweredType().castTo<SILFunctionType>();
     
-    auto param = SILParameterInfo(initTy.getSwiftRValueType(),
+    auto param = SILParameterInfo(initTy.getASTType(),
                         initTy.isAddress() ? ParameterConvention::Indirect_In
                                            : ParameterConvention::Direct_Owned);
-    auto result = SILResultInfo(storageTy.getSwiftRValueType(),
+    auto result = SILResultInfo(storageTy.getASTType(),
                               storageTy.isAddress() ? ResultConvention::Indirect
                                                     : ResultConvention::Owned);
     
@@ -936,7 +938,7 @@ void SILGenFunction::emitMemberInitializers(DeclContext *dc,
       if (pbd->isStatic()) continue;
 
       for (auto entry : pbd->getPatternList()) {
-        auto init = entry.getInit();
+        auto init = entry.getNonLazyInit();
         if (!init) continue;
 
         // Cleanup after this initialization.
@@ -946,7 +948,7 @@ void SILGenFunction::emitMemberInitializers(DeclContext *dc,
         // signature of the type, with replacement archetypes from the
         // constructor's context (which might be in an extension of
         // the type, which adds additional generic requirements).
-        SubstitutionList subs;
+        SubstitutionMap subs;
         auto *genericEnv = dc->getGenericEnvironmentOfContext();
         auto typeGenericSig = nominal->getGenericSignatureOfContext();
 
@@ -954,23 +956,16 @@ void SILGenFunction::emitMemberInitializers(DeclContext *dc,
           // Generate a set of substitutions for the initialization function,
           // whose generic signature is that of the type context, and whose
           // replacement types are the archetypes of the initializer itself.
-          auto subMap = typeGenericSig->getSubstitutionMap(
-                       [&](SubstitutableType *type) {
-                         if (auto gp = type->getAs<GenericTypeParamType>()) {
-                           return genericEnv->mapTypeIntoContext(gp);
-                         }
+          subs = SubstitutionMap::get(
+            typeGenericSig,
+            [&](SubstitutableType *type) {
+              if (auto gp = type->getAs<GenericTypeParamType>()) {
+                return genericEnv->mapTypeIntoContext(gp);
+              }
 
-                         return Type(type);
-                       },
-                       [](CanType dependentType,
-                           Type conformingReplacementType,
-                           ProtocolType *conformedProtocol) {
-                         return ProtocolConformanceRef(
-                                  conformedProtocol->getDecl());
-                       });
-          SmallVector<Substitution, 4> subsVec;
-          typeGenericSig->getSubstitutions(subMap, subsVec);
-          subs = SGM.getASTContext().AllocateCopy(subsVec);
+              return Type(type);
+            },
+            MakeAbstractConformanceForGenericType());
         }
 
         // Get the type of the initialization result, in terms
@@ -1014,8 +1009,9 @@ void SILGenFunction::emitMemberInitializers(DeclContext *dc,
       auto self = emitSelfForMemberInit(*this, var, selfDecl);
       
       auto mark = B.createMarkUninitializedBehavior(var,
-               initFn, init.getSubstitutions(), storageAddr.getValue(),
-               setterFn, getForwardingSubstitutions(), self.getValue(),
+               initFn, init.getSubstitutions(),
+               storageAddr.getValue(),
+               setterFn, getForwardingSubstitutionMap(), self.getValue(),
                getLoweredType(var->getType()).getAddressType());
       
       // The mark instruction stands in for the behavior property.
@@ -1035,7 +1031,9 @@ void SILGenFunction::emitIVarInitializer(SILDeclRef ivarInitializer) {
   SILValue selfArg = F.begin()->createFunctionArgument(selfTy, selfDecl);
   SILLocation PrologueLoc(selfDecl);
   PrologueLoc.markAsPrologue();
-  B.createDebugValue(PrologueLoc, selfArg);
+  // Hard-code self as argument number 1.
+  SILDebugVariable DbgVar(selfDecl->isLet(), 1);
+  B.createDebugValue(PrologueLoc, selfArg, DbgVar);
   selfArg = B.createMarkUninitialized(selfDecl, selfArg,
                                       MarkUninitializedInst::RootSelf);
   assert(selfTy.hasReferenceSemantics() && "can't emit a value type ctor here");

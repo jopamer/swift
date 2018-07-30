@@ -125,7 +125,6 @@ UID_KEYS = [
     KEY('Names', 'key.names'),
     KEY('UIDs', 'key.uids'),
     KEY('SyntacticOnly', 'key.syntactic_only'),
-    KEY('Actionable', 'key.actionable'),
     KEY('ParentLoc', 'key.parent_loc'),
     KEY('IsTestCandidate', 'key.is_test_candidate'),
     KEY('Overrides', 'key.overrides'),
@@ -154,6 +153,8 @@ UID_KEYS = [
     KEY('RetrieveRefactorActions', 'key.retrieve_refactor_actions'),
     KEY('ActionUID', 'key.actionuid'),
     KEY('ActionUnavailableReason', 'key.actionunavailablereason'),
+    KEY('CompileID', 'key.compileid'),
+    KEY('CompilerArgsString', 'key.compilerargs-string'),
 ]
 
 
@@ -204,6 +205,9 @@ UID_REQUESTS = [
     REQUEST('FindLocalRenameRanges',
             'source.request.find-local-rename-ranges'),
     REQUEST('SemanticRefactoring', 'source.request.semantic.refactoring'),
+    REQUEST('EnableCompileNotifications',
+            'source.request.enable-compile-notifications'),
+    REQUEST('TestNotification', 'source.request.test_notification'),
 ]
 
 
@@ -337,6 +341,8 @@ UID_KINDS = [
     KIND('BuildConfigKeyword',
          'source.lang.swift.syntaxtype.buildconfig.keyword'),
     KIND('BuildConfigId', 'source.lang.swift.syntaxtype.buildconfig.id'),
+    KIND('PoundDirectiveKeyword',
+         'source.lang.swift.syntaxtype.pounddirective.keyword'),
     KIND('AttributeId', 'source.lang.swift.syntaxtype.attribute.id'),
     KIND('AttributeBuiltin', 'source.lang.swift.syntaxtype.attribute.builtin'),
     KIND('Number', 'source.lang.swift.syntaxtype.number'),

@@ -47,12 +47,18 @@ enum class IRGenOutputKind : unsigned {
   ObjectFile
 };
 
-enum class IRGenDebugInfoKind : unsigned {
-  None,       /// No debug info.
-  LineTables, /// Line tables only.
-  ASTTypes,   /// Line tables + AST type references.
-  DwarfTypes, /// Line tables + AST type references + DWARF types.
-  Normal = ASTTypes /// The setting LLDB prefers.
+enum class IRGenDebugInfoLevel : unsigned {
+  None,       ///< No debug info.
+  LineTables, ///< Line tables only.
+  ASTTypes,   ///< Line tables + AST type references.
+  DwarfTypes, ///< Line tables + AST type references + DWARF types.
+  Normal = ASTTypes ///< The setting LLDB prefers.
+};
+
+enum class IRGenDebugInfoFormat : unsigned {
+  None,
+  DWARF,
+  CodeView
 };
 
 enum class IRGenEmbedMode : unsigned {
@@ -64,9 +70,6 @@ enum class IRGenEmbedMode : unsigned {
 /// The set of options supported by IR generation.
 class IRGenOptions {
 public:
-  /// The name of the first input file, used by the debug info.
-  std::string MainInputFilename;
-  std::vector<std::string> OutputFilenames;
   std::string ModuleName;
 
   /// The compilation directory for the debug info.
@@ -75,8 +78,8 @@ public:
   /// The DWARF version of debug info.
   unsigned DWARFVersion;
 
-  /// The command line string that is to be stored in the DWARF debug info.
-  std::string DWARFDebugFlags;
+  /// The command line string that is to be stored in the debug info.
+  std::string DebugFlags;
 
   /// List of -Xcc -D macro definitions.
   std::vector<std::string> ClangDefines;
@@ -100,17 +103,23 @@ public:
   /// Which sanitizer is turned on.
   OptionSet<SanitizerKind> Sanitizers;
 
-  /// Whether we should emit debug info.
-  IRGenDebugInfoKind DebugInfoKind : 2;
+  /// What level of debug info to generate.
+  IRGenDebugInfoLevel DebugInfoLevel : 2;
+
+  /// What type of debug info to generate.
+  IRGenDebugInfoFormat DebugInfoFormat : 2;
 
   /// \brief Whether we're generating IR for the JIT.
   unsigned UseJIT : 1;
   
+  /// \brief Whether we're generating code for the integrated REPL.
+  unsigned IntegratedREPL : 1;
+  
   /// \brief Whether we should run LLVM optimizations after IRGen.
   unsigned DisableLLVMOptzns : 1;
 
-  /// \brief Whether we should run LLVM ARC optimizations after IRGen.
-  unsigned DisableLLVMARCOpts : 1;
+  /// Whether we should run swift specific LLVM optimizations after IRGen.
+  unsigned DisableSwiftSpecificLLVMOptzns : 1;
 
   /// \brief Whether we should run LLVM SLP vectorizer.
   unsigned DisableLLVMSLPVectorizer : 1;
@@ -152,6 +161,12 @@ public:
   /// Emit names of struct stored properties and enum cases.
   unsigned EnableReflectionNames : 1;
 
+  /// Enables resilient class layout.
+  unsigned EnableClassResilience : 1;
+
+  /// Bypass resilience when accessing resilient frameworks.
+  unsigned EnableResilienceBypass : 1;
+
   /// Should we try to build incrementally by not emitting an object file if it
   /// has the same IR hash as the module that we are preparing to emit?
   ///
@@ -178,35 +193,25 @@ public:
       : DWARFVersion(2), OutputKind(IRGenOutputKind::LLVMAssembly),
         Verify(true), OptMode(OptimizationMode::NotSet),
         Sanitizers(OptionSet<SanitizerKind>()),
-        DebugInfoKind(IRGenDebugInfoKind::None), UseJIT(false),
-        DisableLLVMOptzns(false), DisableLLVMARCOpts(false),
+        DebugInfoLevel(IRGenDebugInfoLevel::None),
+        DebugInfoFormat(IRGenDebugInfoFormat::None),
+        UseJIT(false), IntegratedREPL(false),
+        DisableLLVMOptzns(false), DisableSwiftSpecificLLVMOptzns(false),
         DisableLLVMSLPVectorizer(false), DisableFPElim(true), Playground(false),
         EmitStackPromotionChecks(false), PrintInlineTree(false),
         EmbedMode(IRGenEmbedMode::None), HasValueNamesSetting(false),
         ValueNames(false), EnableReflectionMetadata(true),
-        EnableReflectionNames(true), UseIncrementalLLVMCodeGen(true),
+        EnableReflectionNames(true), EnableClassResilience(false),
+        EnableResilienceBypass(false), UseIncrementalLLVMCodeGen(true),
         UseSwiftCall(false), GenerateProfile(false), CmdArgs(),
         SanitizeCoverage(llvm::SanitizerCoverageOptions()) {}
-
-  /// Gets the name of the specified output filename.
-  /// If multiple files are specified, the last one is returned.
-  /// This function is used by (at least)
-  /// lldb/source/Symbol/SwiftASTContext.cpp:4603
-  /// FIXME: This function should go away in favor of
-  /// Instance.getFrontendOptions().InputsAndOutputs.getSingleOutputFilename
-  /// when batch mode handles all contingencies.
-  StringRef getSingleOutputFilename() const {
-    if (OutputFilenames.size() >= 1)
-      return OutputFilenames.back();
-    return StringRef();
-  }
 
   // Get a hash of all options which influence the llvm compilation but are not
   // reflected in the llvm module itself.
   unsigned getLLVMCodeGenOptionsHash() {
     unsigned Hash = (unsigned)OptMode;
     Hash = (Hash << 1) | DisableLLVMOptzns;
-    Hash = (Hash << 1) | DisableLLVMARCOpts;
+    Hash = (Hash << 1) | DisableSwiftSpecificLLVMOptzns;
     return Hash;
   }
 

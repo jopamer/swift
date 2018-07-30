@@ -1,5 +1,4 @@
-// RUN: rm -rf %t
-// RUN: mkdir -p %t
+// RUN: %empty-directory(%t)
 
 // FIXME: BEGIN -enable-source-import hackaround
 // RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -emit-module -o %t %clang-importer-sdk-path/swift-modules/CoreGraphics.swift
@@ -17,6 +16,6 @@ import UsesImportedEnums
 // CHECK-LABEL: sil hidden @$S4main4test1eSbSo13NSRuncingModeV_tF
 func test(e: NSRuncingMode) -> Bool {
   // CHECK-NOT: return
-  // CHECK: $Ss2eeoiySbx_xts16RawRepresentableRzs9Equatable0B5ValueRpzlF
+  // CHECK: $Ss2eeoiySbx_xtSYRzSQ8RawValueRpzlF
   return compareImportedEnumToSelf(e)
 }

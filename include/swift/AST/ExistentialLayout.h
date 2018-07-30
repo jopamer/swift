@@ -37,8 +37,8 @@ struct ExistentialLayout {
   ExistentialLayout(ProtocolType *type);
   ExistentialLayout(ProtocolCompositionType *type);
 
-  /// The superclass constraint, if any.
-  Type superclass;
+  /// The explicit superclass constraint, if any.
+  Type explicitSuperclass;
 
   /// Whether the existential contains an explicit '& AnyObject' constraint.
   bool hasExplicitAnyObject : 1;
@@ -50,21 +50,26 @@ struct ExistentialLayout {
 
   bool isObjC() const {
     // FIXME: Does the superclass have to be @objc?
-    return ((superclass ||
+    return ((explicitSuperclass ||
              hasExplicitAnyObject ||
-             getProtocols().size() > 0)
-            && !containsNonObjCProtocol);
+             !getProtocols().empty()) &&
+            !containsNonObjCProtocol);
   }
 
   /// Whether the existential requires a class, either via an explicit
   /// '& AnyObject' member or because of a superclass or protocol constraint.
   bool requiresClass() const;
 
-  // Does this existential contain the Error protocol?
+  /// Returns the existential's superclass, if any; this is either an explicit
+  /// superclass term in a composition type, or the superclass of one of the
+  /// protocols.
+  Type getSuperclass() const;
+
+  /// Does this existential contain the Error protocol?
   bool isExistentialWithError(ASTContext &ctx) const;
 
-  // Does this existential consist of an Error protocol only with no other
-  // constraints?
+  /// Does this existential consist of an Error protocol only with no other
+  /// constraints?
   bool isErrorExistential() const;
 
   static inline ProtocolType *getProtocolType(const Type &Ty) {
@@ -72,18 +77,22 @@ struct ExistentialLayout {
   }
   typedef ArrayRefView<Type,ProtocolType*,getProtocolType> ProtocolTypeArrayRef;
 
-  ProtocolTypeArrayRef getProtocols() const {
+  ProtocolTypeArrayRef getProtocols() const & {
+    if (singleProtocol)
+      return llvm::makeArrayRef(&singleProtocol, 1);
     return protocols;
   }
+  /// The returned ArrayRef may point directly to \c this->singleProtocol, so
+  /// calling this on a temporary is likely to be incorrect.
+  ProtocolTypeArrayRef getProtocols() const && = delete;
 
   LayoutConstraint getLayoutConstraint() const;
 
 private:
-  // Inline storage for 'protocols' member above when computing
-  // layout of a single ProtocolType
+  // The protocol from a ProtocolType
   Type singleProtocol;
 
-  /// Zero or more protocol constraints.
+  /// Zero or more protocol constraints from a ProtocolCompositionType
   ArrayRef<Type> protocols;
 };
 

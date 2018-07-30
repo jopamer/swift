@@ -166,6 +166,13 @@ public:
   virtual AccessKind getBaseAccessKind(SILGenFunction &SGF,
                                        AccessKind accessKind) const = 0;
 
+  /// Is loading a value from this component guaranteed to have no observable
+  /// side effects?
+  virtual bool isLoadingPure() const {
+    // By default, don't assume any component is pure; components must opt-in.
+    return false;
+  }
+
   virtual bool isRValue() const { return false; }
 
   /// Returns the logical type-as-rvalue of the value addressed by the
@@ -363,6 +370,16 @@ public:
 
   bool isValid() const { return !Path.empty(); }
 
+  /// Is loading a value from this lvalue guaranteed to have no observable side
+  /// effects?
+  bool isLoadingPure() {
+    assert(isValid());
+    for (auto &component : Path)
+      if (!component->isLoadingPure())
+        return false;
+    return true;
+  }
+
   /// Is this lvalue purely physical?
   bool isPhysical() const {
     assert(isValid());
@@ -414,7 +431,7 @@ public:
   /// Add a member component to the access path of this lvalue.
   void addMemberComponent(SILGenFunction &SGF, SILLocation loc,
                           AbstractStorageDecl *storage,
-                          SubstitutionList subs,
+                          SubstitutionMap subs,
                           LValueOptions options,
                           bool isSuper,
                           AccessKind accessKind,
@@ -425,7 +442,7 @@ public:
 
   void addMemberVarComponent(SILGenFunction &SGF, SILLocation loc,
                              VarDecl *var,
-                             SubstitutionList subs,
+                             SubstitutionMap subs,
                              LValueOptions options,
                              bool isSuper,
                              AccessKind accessKind,
@@ -435,7 +452,7 @@ public:
 
   void addMemberSubscriptComponent(SILGenFunction &SGF, SILLocation loc,
                                    SubscriptDecl *subscript,
-                                   SubstitutionList subs,
+                                   SubstitutionMap subs,
                                    LValueOptions options,
                                    bool isSuper,
                                    AccessKind accessKind,

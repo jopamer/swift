@@ -12,9 +12,11 @@
 
 #define DEBUG_TYPE "definite-init"
 #include "DIMemoryUseCollectorOwnership.h"
+#include "MandatoryOptUtils.h"
 #include "swift/AST/DiagnosticEngine.h"
 #include "swift/AST/DiagnosticsSIL.h"
 #include "swift/AST/Expr.h"
+#include "swift/AST/Stmt.h"
 #include "swift/ClangImporter/ClangModule.h"
 #include "swift/SIL/InstructionUtils.h"
 #include "swift/SIL/SILArgument.h"
@@ -44,8 +46,6 @@ llvm::cl::opt<bool> TriggerUnreachableOnFailure(
                    "Meant for debugging ONLY!"),
     llvm::cl::Hidden);
 
-STATISTIC(NumAssignRewritten, "Number of assigns rewritten");
-
 template<typename ...ArgTypes>
 static InFlightDiagnostic diagnose(SILModule &M, SILLocation loc,
                                    ArgTypes... args) {
@@ -55,83 +55,6 @@ static InFlightDiagnostic diagnose(SILModule &M, SILLocation loc,
     llvm_unreachable("Triggering standard assertion failure routine");
   return diag;
 }
-
-enum class PartialInitializationKind {
-  /// The box contains a fully-initialized value.
-  IsNotInitialization,
-
-  /// The box contains a class instance that we own, but the instance has
-  /// not been initialized and should be freed with a special SIL
-  /// instruction made for this purpose.
-  IsReinitialization,
-
-  /// The box contains an undefined value that should be ignored.
-  IsInitialization,
-};
-
-/// Emit the sequence that an assign instruction lowers to once we know
-/// if it is an initialization or an assignment.  If it is an assignment,
-/// a live-in value can be provided to optimize out the reload.
-static void LowerAssignInstruction(SILBuilderWithScope &B, AssignInst *Inst,
-                                   PartialInitializationKind isInitialization) {
-  DEBUG(llvm::dbgs() << "  *** Lowering [isInit=" << unsigned(isInitialization)
-                     << "]: " << *Inst << "\n");
-
-  ++NumAssignRewritten;
-
-  SILValue Src = Inst->getSrc();
-  SILLocation Loc = Inst->getLoc();
-
-  if (isInitialization == PartialInitializationKind::IsInitialization ||
-      Inst->getDest()->getType().isTrivial(Inst->getModule())) {
-
-    // If this is an initialization, or the storage type is trivial, we
-    // can just replace the assignment with a store.
-    assert(isInitialization != PartialInitializationKind::IsReinitialization);
-    B.createTrivialStoreOr(Loc, Src, Inst->getDest(),
-                           StoreOwnershipQualifier::Init);
-    Inst->eraseFromParent();
-    return;
-  }
-
-  if (isInitialization == PartialInitializationKind::IsReinitialization) {
-    // We have a case where a convenience initializer on a class
-    // delegates to a factory initializer from a protocol extension.
-    // Factory initializers give us a whole new instance, so the existing
-    // instance, which has not been initialized and never will be, must be
-    // freed using dealloc_partial_ref.
-    SILValue Pointer =
-        B.createLoad(Loc, Inst->getDest(), LoadOwnershipQualifier::Take);
-    B.createStore(Loc, Src, Inst->getDest(), StoreOwnershipQualifier::Init);
-
-    auto MetatypeTy = CanMetatypeType::get(
-        Inst->getDest()->getType().getSwiftRValueType(),
-        MetatypeRepresentation::Thick);
-    auto SILMetatypeTy = SILType::getPrimitiveObjectType(MetatypeTy);
-    SILValue Metatype = B.createValueMetatype(Loc, SILMetatypeTy, Pointer);
-
-    B.createDeallocPartialRef(Loc, Pointer, Metatype);
-    Inst->eraseFromParent();
-    return;
-  }
-
-  assert(isInitialization == PartialInitializationKind::IsNotInitialization);
-  // Otherwise, we need to replace the assignment with the full
-  // load/store/release dance. Note that the new value is already
-  // considered to be retained (by the semantics of the storage type),
-  // and we're transferring that ownership count into the destination.
-
-  // This is basically TypeLowering::emitStoreOfCopy, except that if we have
-  // a known incoming value, we can avoid the load.
-  SILValue IncomingVal =
-      B.createLoad(Loc, Inst->getDest(), LoadOwnershipQualifier::Take);
-  B.createStore(Inst->getLoc(), Src, Inst->getDest(),
-                StoreOwnershipQualifier::Init);
-
-  B.emitDestroyValueOperation(Loc, IncomingVal);
-  Inst->eraseFromParent();
-}
-
 
 /// Insert a CFG diamond at the position specified by the SILBuilder, with a
 /// conditional branch based on "Cond".
@@ -191,11 +114,7 @@ static void InsertCFGDiamond(SILValue Cond, SILLocation Loc, SILBuilder &B,
 //===----------------------------------------------------------------------===//
 
 namespace {
-  enum class DIKind : unsigned char {
-    No,
-    Yes,
-    Partial
-  };
+enum class DIKind : uint8_t { No, Yes, Partial };
 } // end anonymous namespace
 
 /// This implements the lattice merge operation for 2 optional DIKinds.
@@ -578,6 +497,10 @@ namespace {
     void processUninitializedRelease(SILInstruction *Release,
                                      bool consumed,
                                      SILBasicBlock::iterator InsertPt);
+    void processUninitializedReleaseOfBox(AllocBoxInst *ABI,
+                                          SILInstruction *Release,
+                                          bool consumed,
+                                          SILBasicBlock::iterator InsertPt);
     void deleteDeadRelease(unsigned ReleaseID);
 
     void processNonTrivialRelease(unsigned ReleaseID);
@@ -965,7 +888,8 @@ static void maybeSuggestNoArgSelfInit(SILModule &module, SILLocation loc,
     return;
 
   ASTContext &ctx = module.getASTContext();
-  DeclName noArgInit(ctx, ctx.Id_init, ArrayRef<Identifier>());
+  DeclName noArgInit(ctx, DeclBaseName::createConstructor(),
+                     ArrayRef<Identifier>());
 
   auto lookupResults = theStruct->lookupDirect(noArgInit);
   if (lookupResults.size() != 1)
@@ -1076,7 +1000,7 @@ void LifetimeChecker::handleStoreUse(unsigned UseID) {
     Type selfTy;
     SILLocation fnLoc = TheMemory.getFunction().getLocation();
     if (auto *ctor = fnLoc.getAsASTNode<ConstructorDecl>())
-      selfTy = ctor->getImplicitSelfDecl()->getType()->getInOutObjectType();
+      selfTy = ctor->getImplicitSelfDecl()->getType();
     else
       selfTy = TheMemory.getType();
 
@@ -1316,14 +1240,32 @@ void LifetimeChecker::handleEscapeUse(const DIMemoryUse &Use) {
     noteUninitializedMembers(Use);
     return;
   }
- 
 
+  // Extract the reason why this escape-use instruction exists and present
+  // diagnostics. While an escape-use instruction generally corresponds to a
+  // capture by a closure, there are the following special cases to consider:
+  //
+  // (a) A MarkFunctionEscapeInst with an operand say %var. This is introduced
+  // by the SILGen phase when %var is the address of a global variable that
+  // escapes because it is used by a closure or a defer statement or a function
+  // definition appearing at the top-level. The specific reason why %var escapes
+  // is recorded in MarkFunctionEscapeInst by making its SIL Location refer to
+  // the AST of the construct that uses the global variable (namely, a closure
+  // or a defer statement or a function definition). So, if %var is
+  // uninitialized at MarkFunctionEscapeInst, extract and report the reason
+  // why the variable escapes in the error message.
+  //
+  // (b) An UncheckedTakeEnumDataAddrInst takes the address of the data of
+  // an optional and is introduced as an intermediate step in optional chaining.
   Diag<StringRef, bool> DiagMessage;
   if (isa<MarkFunctionEscapeInst>(Inst)) {
-    if (Inst->getLoc().isASTNode<AbstractClosureExpr>())
+    if (Inst->getLoc().isASTNode<AbstractClosureExpr>()) {
       DiagMessage = diag::variable_closure_use_uninit;
-    else
+    } else if (Inst->getLoc().isASTNode<DeferStmt>()) {
+      DiagMessage = diag::variable_defer_use_uninit;
+    } else {
       DiagMessage = diag::variable_function_use_uninit;
+    }
   } else if (isa<UncheckedTakeEnumDataAddrInst>(Inst)) {
     DiagMessage = diag::variable_used_before_initialized;
   } else {
@@ -1915,7 +1857,7 @@ void LifetimeChecker::updateInstructionForInitState(DIMemoryUse &Use) {
 
     SmallVector<SILInstruction*, 4> InsertedInsts;
     SILBuilderWithScope B(Inst, &InsertedInsts);
-    LowerAssignInstruction(B, AI, PartialInitKind);
+    lowerAssignInstruction(B, AI, PartialInitKind);
 
     // If lowering of the assign introduced any new loads or stores, keep track
     // of them.
@@ -1938,56 +1880,68 @@ void LifetimeChecker::updateInstructionForInitState(DIMemoryUse &Use) {
   assert(isa<StoreInst>(Inst) && "Unknown store instruction!");
 }
 
+void LifetimeChecker::processUninitializedReleaseOfBox(
+    AllocBoxInst *ABI, SILInstruction *Release, bool consumed,
+    SILBasicBlock::iterator InsertPt) {
+  assert(ABI == Release->getOperand(0));
+  SILBuilderWithScope B(Release);
+  B.setInsertionPoint(InsertPt);
+  Destroys.push_back(B.createDeallocBox(Release->getLoc(), ABI));
+}
+
 void LifetimeChecker::processUninitializedRelease(SILInstruction *Release,
                                                   bool consumed,
                                              SILBasicBlock::iterator InsertPt) {
   // If this is an early release of a class instance, we need to emit a
   // dealloc_partial_ref to free the memory.  If this is a derived class, we
   // may have to do a load of the 'self' box to get the class reference.
-  if (TheMemory.isClassInitSelf()) {
-    auto Loc = Release->getLoc();
-    
-    SILBuilderWithScope B(Release);
-    B.setInsertionPoint(InsertPt);
-
-    SILValue Pointer = Release->getOperand(0);
-
-    // If we see an alloc_box as the pointer, then we're deallocating a 'box'
-    // for self.  Make sure we're using its address result, not its refcount
-    // result, and make sure that the box gets deallocated (not released)
-    // since the pointer it contains will be manually cleaned up.
-    auto *ABI = dyn_cast<AllocBoxInst>(Release->getOperand(0));
-    if (ABI)
-      Pointer = getOrCreateProjectBox(ABI, 0);
-
-    if (!consumed) {
-      if (Pointer->getType().isAddress())
-        Pointer = B.createLoad(Loc, Pointer, LoadOwnershipQualifier::Take);
-
-      auto MetatypeTy = CanMetatypeType::get(
-          TheMemory.MemorySILType.getSwiftRValueType(),
-          MetatypeRepresentation::Thick);
-      auto SILMetatypeTy = SILType::getPrimitiveObjectType(MetatypeTy);
-      SILValue Metatype;
-
-      // In an inherited convenience initializer, we must use the dynamic
-      // type of the object since nothing is initialized yet.
-      if (TheMemory.isDelegatingInit())
-        Metatype = B.createValueMetatype(Loc, SILMetatypeTy, Pointer);
-      else
-        Metatype = B.createMetatype(Loc, SILMetatypeTy);
-
-      // We've already destroyed any instance variables initialized by this
-      // constructor, now destroy instance variables initialized by subclass
-      // constructors that delegated to us, and finally free the memory.
-      B.createDeallocPartialRef(Loc, Pointer, Metatype);
+  if (!TheMemory.isClassInitSelf()) {
+    if (auto *ABI = dyn_cast<AllocBoxInst>(Release->getOperand(0))) {
+      return processUninitializedReleaseOfBox(ABI, Release, consumed, InsertPt);
     }
-    
-    // dealloc_box the self box if necessary.
-    if (ABI) {
-      auto DB = B.createDeallocBox(Loc, ABI);
-      Destroys.push_back(DB);
-    }
+    return;
+  }
+
+  auto Loc = Release->getLoc();
+
+  SILBuilderWithScope B(Release);
+  B.setInsertionPoint(InsertPt);
+
+  SILValue Pointer = Release->getOperand(0);
+
+  // If we see an alloc_box as the pointer, then we're deallocating a 'box' for
+  // self. Make sure that the box gets deallocated (not released) since the
+  // pointer it contains will be manually cleaned up.
+  auto *ABI = dyn_cast<AllocBoxInst>(Release->getOperand(0));
+  if (ABI)
+    Pointer = getOrCreateProjectBox(ABI, 0);
+
+  if (!consumed) {
+    if (Pointer->getType().isAddress())
+      Pointer = B.createLoad(Loc, Pointer, LoadOwnershipQualifier::Take);
+
+    auto MetatypeTy = CanMetatypeType::get(TheMemory.MemorySILType.getASTType(),
+                                           MetatypeRepresentation::Thick);
+    auto SILMetatypeTy = SILType::getPrimitiveObjectType(MetatypeTy);
+    SILValue Metatype;
+
+    // In an inherited convenience initializer, we must use the dynamic
+    // type of the object since nothing is initialized yet.
+    if (TheMemory.isDelegatingInit())
+      Metatype = B.createValueMetatype(Loc, SILMetatypeTy, Pointer);
+    else
+      Metatype = B.createMetatype(Loc, SILMetatypeTy);
+
+    // We've already destroyed any instance variables initialized by this
+    // constructor, now destroy instance variables initialized by subclass
+    // constructors that delegated to us, and finally free the memory.
+    B.createDeallocPartialRef(Loc, Pointer, Metatype);
+  }
+
+  // dealloc_box the self box if necessary.
+  if (ABI) {
+    auto DB = B.createDeallocBox(Loc, ABI);
+    Destroys.push_back(DB);
   }
 }
 
@@ -2240,9 +2194,6 @@ SILValue LifetimeChecker::handleConditionalInitAssign() {
       updateControlVariable(Loc, Bitmask, ControlVariableAddr, OrFn, SB);
       continue;
     }
-
-    assert(!TheMemory.isDelegatingInit() &&
-           "re-assignment of self in delegating init?");
 
     // If this ambiguous store is only of trivial types, then we don't need to
     // do anything special.  We don't even need keep the init bit for the
@@ -2902,65 +2853,35 @@ static bool checkDefiniteInitialization(SILFunction &Fn) {
   DEBUG(llvm::dbgs() << "*** Definite Init visiting function: "
                      <<  Fn.getName() << "\n");
   bool Changed = false;
-  for (auto &BB : Fn) {
-    for (auto I = BB.begin(), E = BB.end(); I != E; ++I) {
-      SILInstruction *Inst = &*I;
-      if (auto *MUI = dyn_cast<MarkUninitializedInst>(Inst))
-        Changed |= processMemoryObject(MUI);
-    }
-  }
-  return Changed;
-}
 
-/// lowerRawSILOperations - There are a variety of raw-sil instructions like
-/// 'assign' that are only used by this pass.  Now that definite initialization
-/// checking is done, remove them.
-static bool lowerRawSILOperations(SILFunction &Fn) {
-  bool Changed = false;
   for (auto &BB : Fn) {
-    auto I = BB.begin(), E = BB.end();
-    while (I != E) {
+    for (auto I = BB.begin(), E = BB.end(); I != E;) {
       SILInstruction *Inst = &*I;
+
+      auto *MUI = dyn_cast<MarkUninitializedInst>(Inst);
+      if (!MUI || !processMemoryObject(MUI)) {
+        ++I;
+        continue;
+      }
+
+      // Move off of the MUI only after we have processed memory objects. The
+      // lifetime checker may rewrite instructions, so it is important to not
+      // move onto the next element until after it runs.
       ++I;
-
-      // Unprocessed assigns just lower into assignments, not initializations.
-      if (auto *AI = dyn_cast<AssignInst>(Inst)) {
-        SILBuilderWithScope B(AI);
-        LowerAssignInstruction(B, AI,
-            PartialInitializationKind::IsNotInitialization);
-        // Assign lowering may split the block. If it did,
-        // reset our iteration range to the block after the insertion.
-        if (B.getInsertionBB() != &BB)
-          I = E;
-        Changed = true;
-        continue;
-      }
-
-      // mark_uninitialized just becomes a noop, resolving to its operand.
-      if (auto *MUI = dyn_cast<MarkUninitializedInst>(Inst)) {
-        MUI->replaceAllUsesWith(MUI->getOperand());
-        MUI->eraseFromParent();
-        Changed = true;
-        continue;
-      }
-      
-      // mark_function_escape just gets zapped.
-      if (isa<MarkFunctionEscapeInst>(Inst)) {
-        Inst->eraseFromParent();
-        Changed = true;
-        continue;
-      }
+      MUI->replaceAllUsesWith(MUI->getOperand());
+      MUI->eraseFromParent();
+      Changed = true;
     }
   }
+
   return Changed;
 }
-
 
 namespace {
+
 /// Perform definitive initialization analysis and promote alloc_box uses into
 /// SSA registers for later SSA-based dataflow passes.
 class DefiniteInitialization : public SILFunctionTransform {
-
   /// The entry point to the transformation.
   void run() override {
     // Don't rerun diagnostics on deserialized functions.
@@ -2971,15 +2892,9 @@ class DefiniteInitialization : public SILFunctionTransform {
     if (checkDefiniteInitialization(*getFunction())) {
       invalidateAnalysis(SILAnalysis::InvalidationKind::FunctionBody);
     }
-
-    DEBUG(getFunction()->verify());
-
-    // Lower raw-sil only instructions used by this pass, like "assign".
-    if (lowerRawSILOperations(*getFunction()))
-      invalidateAnalysis(SILAnalysis::InvalidationKind::FunctionBody);
   }
-
 };
+
 } // end anonymous namespace
 
 SILTransform *swift::createDefiniteInitialization() {

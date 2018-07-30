@@ -42,7 +42,7 @@ class ModuleDecl;
 class ConformanceLookupTable {
   /// Describes the stage at which a particular nominal type or
   /// extension's conformances has been processed.
-  enum class ConformanceStage : unsigned char {
+  enum class ConformanceStage : uint8_t {
     /// The explicit conformances have been recorded in the lookup table.
     RecordedExplicit,
 
@@ -335,8 +335,9 @@ class ConformanceLookupTable {
                    ConformanceSource source);
 
   /// Add the protocols from the given list.
-  void addProtocols(ArrayRef<TypeLoc> inherited,
-                    ConformanceSource source, LazyResolver *resolver);
+  void addInheritedProtocols(
+                         llvm::PointerUnion<TypeDecl *, ExtensionDecl *> decl,
+                         ConformanceSource source);
 
   /// Expand the implied conformances for the given DeclContext.
   void expandImpliedConformances(NominalTypeDecl *nominal, DeclContext *dc,

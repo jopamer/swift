@@ -12,7 +12,6 @@
 
 @_exported import Metal // Clang module
 
-@available(swift 4)
 @available(macOS 10.11, iOS 8.0, tvOS 8.0, *)
 extension MTLBlitCommandEncoder {
     
@@ -21,7 +20,6 @@ extension MTLBlitCommandEncoder {
     }
 }
 
-@available(swift 4)
 @available(macOS 10.11, iOS 8.0, tvOS 8.0, *)
 extension MTLBuffer {
     
@@ -38,7 +36,6 @@ extension MTLBuffer {
     }
 }
 
-@available(swift 4)
 @available(macOS 10.11, iOS 8.0, tvOS 8.0, *)
 extension MTLComputeCommandEncoder {
     
@@ -67,9 +64,13 @@ extension MTLComputeCommandEncoder {
     public func setSamplerStates(_ samplers: [MTLSamplerState?], lodMinClamps: [Float], lodMaxClamps: [Float], range: Range<Int>) {
         __setSamplerStates(samplers, lodMinClamps: lodMinClamps, lodMaxClamps: lodMaxClamps, with: NSRange(location: range.lowerBound, length: range.count))
     }
+    
+    @available(macOS 10.14, iOS 12.0, tvOS 12.0, *)
+    public func memoryBarrier(_ resources:[MTLResource]) {
+        __memoryBarrier(resources: resources, count: resources.count)
+    }
 }
 
-@available(swift 4)
 @available(macOS 10.11, iOS 8.0, tvOS 8.0, *)
 extension MTLDevice {
     
@@ -92,7 +93,6 @@ public func MTLCopyAllDevicesWithObserver(handler: @escaping MTLDeviceNotificati
 }
 #endif
 
-@available(swift 4)
 @available(macOS 10.12, iOS 10.0, tvOS 10.0, *)
 extension MTLFunctionConstantValues {
     
@@ -102,7 +102,6 @@ extension MTLFunctionConstantValues {
     
 }
 
-@available(swift 4)
 @available(macOS 10.13, iOS 11.0, tvOS 11.0, *)
 extension MTLArgumentEncoder {
     
@@ -119,7 +118,6 @@ extension MTLArgumentEncoder {
     }
 }
 
-@available(swift 4)
 @available(macOS 10.11, iOS 8.0, tvOS 8.0, *)
 extension MTLRenderCommandEncoder {
     
@@ -199,9 +197,15 @@ extension MTLRenderCommandEncoder {
         __setTileSamplerStates(samplers, lodMinClamps: lodMinClamps, lodMaxClamps: lodMaxClamps, with: NSRange(location: range.lowerBound, length: range.count))
     }
 #endif
+    
+#if os(macOS)
+    @available(macOS 10.14, *)
+    public func memoryBarrier(_ resources: [MTLResource], after: MTLRenderStages, before: MTLRenderStages) {
+        __memoryBarrier(resources: resources, count: resources.count, after: after, before: before)
+    }
+#endif
 }
 
-@available(swift 4)
 @available(macOS 10.11, iOS 8.0, tvOS 8.0, *)
 extension MTLRenderPassDescriptor {
     
@@ -220,7 +224,6 @@ extension MTLRenderPassDescriptor {
     
 }
 
-@available(swift 4)
 @available(macOS 10.11, iOS 8.0, tvOS 8.0, *)
 extension MTLTexture {
     

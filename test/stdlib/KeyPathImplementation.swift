@@ -198,9 +198,9 @@ struct TestKeyPathBuilder {
     assert(offset >= 0 && offset <= 0x7FFF_FFFF,
            "invalid offset")
     let referencePrefixMask: UInt32 = endsReferencePrefix ? 0x8000_0000 : 0
-    if forceOverflow || offset >= 0x1FFF_FFFF {
+    if forceOverflow || offset >= 0x00FF_FFFF {
       // Offset is overflowed into another word
-      push(referencePrefixMask | kindMask | 0x1FFF_FFFF)
+      push(referencePrefixMask | kindMask | 0x00FF_FFFF)
       push(UInt32(offset))
     } else {
       // Offset is packed in-line
@@ -224,7 +224,7 @@ struct TestKeyPathBuilder {
   mutating func addClassComponent(offset: Int,
                                   forceOverflow: Bool = false,
                                   endsReferencePrefix: Bool = false) {
-    addOffsetComponent(offset: offset, kindMask: 0x4000_0000,
+    addOffsetComponent(offset: offset, kindMask: 0x0200_0000,
                        forceOverflow: forceOverflow,
                        endsReferencePrefix: endsReferencePrefix)
   }
@@ -237,7 +237,7 @@ struct TestKeyPathBuilder {
     endsReferencePrefix: Bool = false
   ) {
     assert(state == .component, "not expecting a component")
-    push(0x2100_0000 | (endsReferencePrefix ? 0x8000_0000 : 0))
+    push(0x0108_0000 | (endsReferencePrefix ? 0x8000_0000 : 0))
     pushWord(id)
     pushWord(getter)
     pushWord(args.count)
@@ -657,7 +657,10 @@ keyPathImpl.test("equality") {
     }
 
   expectNotEqual(s_c_z_p_x, s_c_z_p_y)
+  expectNotEqual(s_c_z_p_x.hashValue, s_c_z_p_y.hashValue)
+
   expectNotEqual(s_c_z_p_y, s_c_z_p_x)
+  expectNotEqual(s_c_z_p_y.hashValue, s_c_z_p_x.hashValue)
 
   // Different path type
   let s_c_z_p = ReferenceWritableKeyPath<S<S<String>>, Point>
@@ -676,6 +679,24 @@ keyPathImpl.test("equality") {
 
   expectNotEqual(s_c_z_p_x, s_c_z_p)
   expectNotEqual(s_c_z_p, s_c_z_p_x)
+
+  let s_x = WritableKeyPath<S<String>, Int>
+    .build(capacityInBytes: MemoryLayout<Int>.size + 4) {
+      $0.addHeader(trivial: true, hasReferencePrefix: false)
+      $0.addStructComponent(offset: S<String>.x_offset)
+    }
+
+  let si_x = WritableKeyPath<S<Int>, Int>
+    .build(capacityInBytes: MemoryLayout<Int>.size + 4) {
+      $0.addHeader(trivial: true, hasReferencePrefix: false)
+      $0.addStructComponent(offset: S<Int>.x_offset)
+    }
+
+  expectNotEqual(s_x, si_x)
+  expectNotEqual(s_x.hashValue, si_x.hashValue)
+
+  expectNotEqual(si_x, s_x)
+  expectNotEqual(si_x.hashValue, s_x.hashValue)
 
   // Same path, no reference prefix
   let s_c_z_p_x_readonly = KeyPath<S<S<String>>, Double>

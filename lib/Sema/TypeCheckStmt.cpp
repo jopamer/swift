@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2018 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -377,6 +377,7 @@ public:
   
   template<typename StmtTy>
   bool typeCheckStmt(StmtTy *&S) {
+    PrettyStackTraceStmt trace(TC.Context, "type-checking", S);
     StmtTy *S2 = cast_or_null<StmtTy>(visit(S));
     if (S2 == nullptr)
       return true;
@@ -480,7 +481,7 @@ public:
   }
     
   Stmt *visitDeferStmt(DeferStmt *DS) {
-    TC.typeCheckDecl(DS->getTempDecl(), /*isFirstPass*/false);
+    TC.typeCheckDecl(DS->getTempDecl());
 
     Expr *theCall = DS->getCallExpr();
     TC.typeCheckExpression(theCall, DC);
@@ -641,11 +642,9 @@ public:
       // Create a pattern binding to initialize the generator.
       auto genPat = new (TC.Context) NamedPattern(generator);
       genPat->setImplicit();
-      auto genBinding =
-          PatternBindingDecl::create(TC.Context, SourceLoc(),
-                                     StaticSpellingKind::None,
-                                     S->getForLoc(), genPat, getIterator, DC);
-      genBinding->setImplicit();
+      auto *genBinding = PatternBindingDecl::createImplicit(
+          TC.Context, StaticSpellingKind::None, genPat, getIterator, DC,
+          /*VarLoc*/ S->getForLoc());
       S->setIterator(genBinding);
     }
 
@@ -821,7 +820,7 @@ public:
     // Type-check the subject expression.
     Expr *subjectExpr = S->getSubjectExpr();
     auto resultTy = TC.typeCheckExpression(subjectExpr, DC);
-    auto hadError = !resultTy;
+    auto limitExhaustivityChecks = !resultTy;
     if (Expr *newSubjectExpr = TC.coerceToRValue(subjectExpr))
       subjectExpr = newSubjectExpr;
     S->setSubjectExpr(subjectExpr);
@@ -835,7 +834,7 @@ public:
     // the list of raw cases.
     for (auto node : S->getRawCases()) {
       if (!node.is<Decl*>()) continue;
-      TC.typeCheckDecl(node.get<Decl*>(), /*isFirstPass*/false);
+      TC.typeCheckDecl(node.get<Decl*>());
     }
 
     auto cases = S->getCases();
@@ -856,7 +855,7 @@ public:
           // Coerce the pattern to the subject's type.
           if (!subjectType || TC.coercePatternToType(pattern, DC, subjectType,
                                      TypeResolutionFlags::InExpression)) {
-            hadError = true;
+            limitExhaustivityChecks = true;
 
             // If that failed, mark any variables binding pieces of the pattern
             // as invalid to silence follow-on errors.
@@ -869,36 +868,85 @@ public:
           // For each variable in the pattern, make sure its type is identical to what it
           // was in the first label item's pattern.
           auto firstPattern = caseBlock->getCaseLabelItems()[0].getPattern();
-          if (pattern != firstPattern) {
-            SmallVector<VarDecl *, 4> vars;
-            firstPattern->collectVariables(vars);
-            pattern->forEachVariable([&](VarDecl *VD) {
-              if (!VD->hasName())
-                return;
-              for (auto *expected : vars) {
-                if (expected->hasName() && expected->getName() == VD->getName()) {
-                  if (!VD->getType()->isEqual(expected->getType())) {
-                    TC.diagnose(VD->getLoc(), diag::type_mismatch_multiple_pattern_list,
-                                VD->getType(), expected->getType());
-                    VD->markInvalid();
-                    expected->markInvalid();
-                  }
-                  return;
+          SmallVector<VarDecl *, 4> vars;
+          firstPattern->collectVariables(vars);
+          pattern->forEachVariable([&](VarDecl *VD) {
+            if (!VD->hasName())
+              return;
+            for (auto *expected : vars) {
+              if (expected->hasName() && expected->getName() == VD->getName()) {
+                if (VD->hasType() && expected->hasType() && !expected->isInvalid() &&
+                    !VD->getType()->isEqual(expected->getType())) {
+                  TC.diagnose(VD->getLoc(), diag::type_mismatch_multiple_pattern_list,
+                              VD->getType(), expected->getType());
+                  VD->markInvalid();
+                  expected->markInvalid();
                 }
+                if (expected->isLet() != VD->isLet()) {
+                  auto diag = TC.diagnose(VD->getLoc(),
+                                          diag::mutability_mismatch_multiple_pattern_list,
+                                          VD->isLet(), expected->isLet());
+
+                  VarPattern *foundVP = nullptr;
+                  VD->getParentPattern()->forEachNode([&](Pattern *P) {
+                    if (auto *VP = dyn_cast<VarPattern>(P))
+                      if (VP->getSingleVar() == VD)
+                        foundVP = VP;
+                  });
+                  if (foundVP)
+                    diag.fixItReplace(foundVP->getLoc(),
+                                      expected->isLet() ? "let" : "var");
+                  VD->markInvalid();
+                  expected->markInvalid();
+                }
+                return;
               }
-            });
-          }
+            }
+          });
         }
         // Check the guard expression, if present.
         if (auto *guard = labelItem.getGuardExpr()) {
-          hadError |= TC.typeCheckCondition(guard, DC);
+          limitExhaustivityChecks |= TC.typeCheckCondition(guard, DC);
           labelItem.setGuardExpr(guard);
         }
       }
-        
+
+      // Check restrictions on '@unknown'.
+      if (caseBlock->hasUnknownAttr()) {
+        if (caseBlock->getCaseLabelItems().size() != 1) {
+          assert(!caseBlock->getCaseLabelItems().empty() &&
+                 "parser should not produce case blocks with no items");
+          TC.diagnose(caseBlock->getLoc(),
+                      diag::unknown_case_multiple_patterns)
+            .highlight(caseBlock->getCaseLabelItems()[1].getSourceRange());
+          limitExhaustivityChecks = true;
+        }
+
+        if (FallthroughDest != nullptr) {
+          if (!caseBlock->isDefault())
+            TC.diagnose(caseBlock->getLoc(), diag::unknown_case_must_be_last);
+          limitExhaustivityChecks = true;
+        }
+
+        const CaseLabelItem &labelItem = caseBlock->getCaseLabelItems().front();
+        if (labelItem.getGuardExpr() && !labelItem.isDefault()) {
+          TC.diagnose(labelItem.getStartLoc(),
+                      diag::unknown_case_where_clause)
+            .highlight(labelItem.getGuardExpr()->getSourceRange());
+        }
+
+        const Pattern *pattern =
+            labelItem.getPattern()->getSemanticsProvidingPattern();
+        if (!isa<AnyPattern>(pattern)) {
+          TC.diagnose(labelItem.getStartLoc(),
+                      diag::unknown_case_must_be_catchall)
+            .highlight(pattern->getSourceRange());
+        }
+      }
+
       // If the previous case fellthrough, similarly check that that case's bindings
       // includes our first label item's pattern bindings and types.
-      if (PreviousFallthrough) {
+      if (PreviousFallthrough && previousBlock) {
         auto firstPattern = caseBlock->getCaseLabelItems()[0].getPattern();
         SmallVector<VarDecl *, 4> Vars;
         firstPattern->collectVariables(Vars);
@@ -934,13 +982,13 @@ public:
       // Type-check the body statements.
       PreviousFallthrough = nullptr;
       Stmt *body = caseBlock->getBody();
-      hadError |= typeCheckStmt(body);
+      limitExhaustivityChecks |= typeCheckStmt(body);
       caseBlock->setBody(body);
       previousBlock = caseBlock;
     }
 
     if (!S->isImplicit()) {
-      TC.checkSwitchExhaustiveness(S, /*limitChecking*/hadError);
+      TC.checkSwitchExhaustiveness(S, DC, limitExhaustivityChecks);
     }
 
     return S;
@@ -1272,7 +1320,7 @@ void TypeChecker::checkIgnoredExpr(Expr *E) {
         .highlight(SR1).highlight(SR2);
     } else
       diagnose(fn->getLoc(), diag::expression_unused_result_unknown,
-               valueE->getType())
+               isa<ClosureExpr>(fn), valueE->getType())
         .highlight(SR1).highlight(SR2);
 
     return;
@@ -1338,7 +1386,7 @@ Stmt *StmtChecker::visitBraceStmt(BraceStmt *BS) {
         (Loc == EndTypeCheckLoc || SM.isBeforeInBuffer(EndTypeCheckLoc, Loc)))
       break;
 
-    TC.typeCheckDecl(SubDecl, /*isFirstPass*/false);
+    TC.typeCheckDecl(SubDecl);
   }
   
   return BS;
@@ -1347,14 +1395,13 @@ Stmt *StmtChecker::visitBraceStmt(BraceStmt *BS) {
 /// Check the default arguments that occur within this pattern.
 static void checkDefaultArguments(TypeChecker &tc,
                                   ParameterList *params,
-                                  unsigned &nextArgIndex,
-                                  AbstractFunctionDecl *func) {
+                                  unsigned &nextArgIndex) {
   for (auto &param : *params) {
     ++nextArgIndex;
     if (!param->getDefaultValue() || !param->hasType() ||
         param->getType()->hasError())
       continue;
-    
+
     Expr *e = param->getDefaultValue();
     auto initContext = param->getDefaultArgumentInitContext();
 
@@ -1377,21 +1424,32 @@ static void checkDefaultArguments(TypeChecker &tc,
 }
 
 /// Check the default arguments that occur within this pattern.
-static void checkDefaultArguments(TypeChecker &tc,
-                                  AbstractFunctionDecl *func) {
+void TypeChecker::checkDefaultArguments(ArrayRef<ParameterList *> paramLists,
+                                        ValueDecl *VD) {
+  auto access =
+    VD->getFormalAccessScope(/*useDC=*/nullptr,
+                             /*treatUsableFromInlineAsPublic=*/true);
+
   // In Swift 4 mode, default argument bodies are inlined into the
   // caller.
-  auto expansion = func->getResilienceExpansion();
-  if (!tc.Context.isSwiftVersion3() &&
-      func->getFormalAccessScope(/*useDC=*/nullptr,
-                                 /*respectVersionedAttr=*/true).isPublic())
-    expansion = ResilienceExpansion::Minimal;
+  if (auto *func = dyn_cast<AbstractFunctionDecl>(VD)) {
+    auto expansion = func->getResilienceExpansion();
+    if (!Context.isSwiftVersion3() && access.isPublic())
+      expansion = ResilienceExpansion::Minimal;
 
-  func->setDefaultArgumentResilienceExpansion(expansion);
+    func->setDefaultArgumentResilienceExpansion(expansion);
+  } else {
+    auto *EED = cast<EnumElementDecl>(VD);
+    auto expansion = ResilienceExpansion::Maximal;
+    if (access.isPublic())
+      expansion = ResilienceExpansion::Minimal;
+
+    EED->setDefaultArgumentResilienceExpansion(expansion);
+  }
 
   unsigned nextArgIndex = 0;
-  for (auto paramList : func->getParameterLists())
-    checkDefaultArguments(tc, paramList, nextArgIndex, func);
+  for (auto *paramList : paramLists)
+    ::checkDefaultArguments(*this, paramList, nextArgIndex);
 }
 
 bool TypeChecker::typeCheckAbstractFunctionBodyUntil(AbstractFunctionDecl *AFD,
@@ -1412,11 +1470,18 @@ bool TypeChecker::typeCheckAbstractFunctionBodyUntil(AbstractFunctionDecl *AFD,
 }
 
 bool TypeChecker::typeCheckAbstractFunctionBody(AbstractFunctionDecl *AFD) {
+  // HACK: don't type-check the same function body twice.  This is
+  // supposed to be handled by just not enqueuing things twice,
+  // but that gets tricky with synthesized function bodies.
+  if (AFD->isBodyTypeChecked())
+    return false;
+
   if (!AFD->getBody())
     return false;
 
-  SWIFT_FUNC_STAT;
-  // FIXME: (transitional) increment the redundant "always-on" counter.
+  FrontendStatsTracer StatsTracer(Context.Stats, "typecheck-fn", AFD);
+  PrettyStackTraceDecl StackEntry("type-checking", AFD);
+
   if (Context.Stats)
     Context.Stats->getFrontendCounters().NumFunctionsTypechecked++;
 
@@ -1427,9 +1492,12 @@ bool TypeChecker::typeCheckAbstractFunctionBody(AbstractFunctionDecl *AFD) {
   for (auto paramList : AFD->getParameterLists())
     requestRequiredNominalTypeLayoutForParameters(paramList);
 
-  if (typeCheckAbstractFunctionBodyUntil(AFD, SourceLoc()))
+  bool error = typeCheckAbstractFunctionBodyUntil(AFD, SourceLoc());
+  AFD->setBodyTypeCheckedIfPresent();
+
+  if (error)
     return true;
-  
+
   performAbstractFuncDeclDiagnostics(*this, AFD);
   return false;
 }
@@ -1438,7 +1506,8 @@ bool TypeChecker::typeCheckAbstractFunctionBody(AbstractFunctionDecl *AFD) {
 // named function or an anonymous func expression.
 bool TypeChecker::typeCheckFunctionBodyUntil(FuncDecl *FD,
                                              SourceLoc EndTypeCheckLoc) {
-  checkDefaultArguments(*this, FD);
+  // Check the default argument definitions.
+  checkDefaultArguments(FD->getParameterLists(), FD);
 
   // Clang imported inline functions do not have a Swift body to
   // typecheck.
@@ -1461,7 +1530,8 @@ Expr* TypeChecker::constructCallToSuperInit(ConstructorDecl *ctor,
   Expr *superRef = new (Context) SuperRefExpr(ctor->getImplicitSelfDecl(),
                                               SourceLoc(), /*Implicit=*/true);
   Expr *r = new (Context) UnresolvedDotExpr(superRef, SourceLoc(),
-                                            Context.Id_init, DeclNameLoc(),
+                                            DeclBaseName::createConstructor(),
+                                            DeclNameLoc(),
                                             /*Implicit=*/true);
   r = CallExpr::createImplicit(Context, r, { }, { });
 
@@ -1541,7 +1611,8 @@ static bool isKnownEndOfConstructor(ASTNode N) {
 
 bool TypeChecker::typeCheckConstructorBodyUntil(ConstructorDecl *ctor,
                                                 SourceLoc EndTypeCheckLoc) {
-  checkDefaultArguments(*this, ctor);
+  // Check the default argument definitions.
+  checkDefaultArguments(ctor->getParameterLists(), ctor);
 
   BraceStmt *body = ctor->getBody();
   if (!body)
@@ -1620,13 +1691,17 @@ bool TypeChecker::typeCheckConstructorBodyUntil(ConstructorDecl *ctor,
     }
 
     // An inlinable constructor in a class must always be delegating,
-    // unless the class is formally '@_fixed_layout'.
-    if (!isDelegating &&
-        ClassD->isFormallyResilient() &&
+    // unless the class is '@_fixed_layout'.
+    // Note: This is specifically not using isFormallyResilient. We relax this
+    // rule for classes in non-resilient modules so that they can have inlinable
+    // constructors, as long as those constructors don't reference private
+    // declarations.
+    if (!isDelegating && ClassD->isResilient() &&
         ctor->getResilienceExpansion() == ResilienceExpansion::Minimal) {
-      diagnose(ctor, diag::class_designated_init_inlineable_resilient,
+      auto kind = getFragileFunctionKind(ctor);
+      diagnose(ctor, diag::class_designated_init_inlinable_resilient,
                ClassD->getDeclaredInterfaceType(),
-               static_cast<unsigned>(getFragileFunctionKind(ctor)));
+               static_cast<unsigned>(kind.first));
     }
   }
 

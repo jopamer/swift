@@ -869,7 +869,6 @@ private:
     if (!CI.getASTContext().hadError()) {
       sil = performSILGeneration(REPLInputFile, CI.getSILOptions(),
                                  RC.CurIRGenElem);
-      performSILLinking(sil.get());
       runSILDiagnosticPasses(*sil);
       runSILLoweringPasses(*sil);
     }
@@ -897,14 +896,14 @@ private:
     if (!ShouldRun)
       return true;
 
+    const PrimarySpecificPaths PSPs =
+        CI.getPrimarySpecificPathsForAtMostOnePrimary();
     // IRGen the current line(s).
     // FIXME: We shouldn't need to use the global context here, but
     // something is persisting across calls to performIRGeneration.
-    auto LineModule = performIRGeneration(IRGenOpts, REPLInputFile,
-                                          std::move(sil),
-                                          "REPLLine",
-                                          getGlobalLLVMContext(),
-                                          RC.CurIRGenElem);
+    auto LineModule = performIRGeneration(
+        IRGenOpts, REPLInputFile, std::move(sil), "REPLLine", PSPs,
+        getGlobalLLVMContext(), RC.CurIRGenElem);
     RC.CurIRGenElem = RC.CurElem;
     
     if (CI.getASTContext().hadError())
@@ -1002,11 +1001,12 @@ public:
     builder.setEngineKind(llvm::EngineKind::JIT);
     EE = builder.create();
 
-    IRGenOpts.OutputFilenames.clear();
     IRGenOpts.OptMode = OptimizationMode::NoOptimization;
     IRGenOpts.OutputKind = IRGenOutputKind::Module;
     IRGenOpts.UseJIT = true;
-    IRGenOpts.DebugInfoKind = IRGenDebugInfoKind::None;
+    IRGenOpts.IntegratedREPL = true;
+    IRGenOpts.DebugInfoLevel = IRGenDebugInfoLevel::None;
+    IRGenOpts.DebugInfoFormat = IRGenDebugInfoFormat::None;
 
     if (!ParseStdlib) {
       // Force standard library to be loaded immediately.  This forces any

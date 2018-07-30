@@ -16,7 +16,7 @@ enum A<T> {
 }
 
 func foo() -> A<(String, String?)> {
-    _ = A<(String, String?)>.Just("abc", "def")
-    _ = A.Just("abc", "def")
-    return A.Just("abc", "def")
+    _ = A<(String, String?)>.Just(("abc", "def"))
+    _ = A.Just(("abc", "def"))
+    return A.Just(("abc", "def"))
 }

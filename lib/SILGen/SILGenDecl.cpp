@@ -16,7 +16,7 @@
 #include "SILGen.h"
 #include "SILGenDynamicCast.h"
 #include "Scope.h"
-#include "SwitchCaseFullExpr.h"
+#include "SwitchEnumBuilder.h"
 #include "swift/AST/ASTMangler.h"
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/Module.h"
@@ -144,8 +144,8 @@ namespace {
   };
 } // end anonymous namespace
 
-SubstitutionList SILGenFunction::getForwardingSubstitutions() {
-  return F.getForwardingSubstitutions();
+SubstitutionMap SILGenFunction::getForwardingSubstitutionMap() {
+  return F.getForwardingSubstitutionMap();
 }
 
 void SILGenFunction::visitFuncDecl(FuncDecl *fd) {
@@ -385,7 +385,7 @@ public:
   /// initialization is completed.
   LocalVariableInitialization(VarDecl *decl,
                               Optional<MarkUninitializedInst::Kind> kind,
-                              unsigned ArgNo, SILGenFunction &SGF)
+                              uint16_t ArgNo, SILGenFunction &SGF)
       : decl(decl), SGF(SGF) {
     assert(decl->getDeclContext()->isLocalContext() &&
            "can't emit a local var for a non-local var decl");
@@ -394,14 +394,14 @@ public:
 
     auto boxType = SGF.SGM.Types
       .getContextBoxTypeForCapture(decl,
-                     SGF.getLoweredType(decl->getType()).getSwiftRValueType(),
+                     SGF.getLoweredType(decl->getType()).getASTType(),
                      SGF.F.getGenericEnvironment(),
                      /*mutable*/ true);
 
     // The variable may have its lifetime extended by a closure, heap-allocate
     // it using a box.
-    SILValue allocBox =
-        SGF.B.createAllocBox(decl, boxType, {decl->isLet(), ArgNo});
+    SILDebugVariable DbgVar(decl->isLet(), ArgNo);
+    SILValue allocBox = SGF.B.createAllocBox(decl, boxType, DbgVar);
 
     // Mark the memory as uninitialized, so DI will track it for us.
     if (kind)
@@ -577,10 +577,11 @@ public:
     // lifetime.
     SILLocation PrologueLoc(vd);
     PrologueLoc.markAsPrologue();
+    SILDebugVariable DbgVar(vd->isLet(), /*ArgNo=*/0);
     if (address)
-      SGF.B.createDebugValueAddr(PrologueLoc, value);
+      SGF.B.createDebugValueAddr(PrologueLoc, value, DbgVar);
     else
-      SGF.B.createDebugValue(PrologueLoc, value);
+      SGF.B.createDebugValue(PrologueLoc, value, DbgVar);
   }
   
   void copyOrInitValueInto(SILGenFunction &SGF, SILLocation loc,
@@ -778,7 +779,7 @@ void EnumElementPatternInitialization::emitEnumMatch(
   // path, causing a use (the destroy on the negative path) to be created that
   // does not dominate its definition (in the positive path).
   auto handler = [&SGF, &loc, &failureDest](ManagedValue mv,
-                                            SwitchCaseFullExpr &expr) {
+                                            SwitchCaseFullExpr &&expr) {
     expr.exit();
     SGF.Cleanups.emitBranchAndCleanups(failureDest, loc);
   };
@@ -803,7 +804,7 @@ void EnumElementPatternInitialization::emitEnumMatch(
   switchBuilder.addCase(
       eltDecl, someBlock, contBlock,
       [&SGF, &loc, &eltDecl, &subInit, &value](ManagedValue mv,
-                                               SwitchCaseFullExpr &expr) {
+                                               SwitchCaseFullExpr &&expr) {
         // If the enum case has no bound value, we're done.
         if (!eltDecl->hasAssociatedValues()) {
           assert(
@@ -860,7 +861,7 @@ void EnumElementPatternInitialization::emitEnumMatch(
         // Reabstract to the substituted type, if needed.
         CanType substEltTy =
             value.getType()
-                .getSwiftRValueType()
+                .getASTType()
                 ->getTypeOfMember(SGF.SGM.M.getSwiftModule(), eltDecl,
                                   eltDecl->getArgumentInterfaceType())
                 ->getCanonicalType();
@@ -1140,7 +1141,7 @@ void SILGenFunction::emitPatternBinding(PatternBindingDecl *PBD,
 
   // If an initial value expression was specified by the decl, emit it into
   // the initialization. Otherwise, mark it uninitialized for DI to resolve.
-  if (auto *Init = entry.getInit()) {
+  if (auto *Init = entry.getNonLazyInit()) {
     FullExpr Scope(Cleanups, CleanupLocation(Init));
     emitExprInto(Init, initialization.get(), SILLocation(PBD));
   } else {
@@ -1286,51 +1287,6 @@ CleanupHandle SILGenFunction::enterDeallocStackCleanup(SILValue temp) {
 CleanupHandle SILGenFunction::enterDestroyCleanup(SILValue valueOrAddr) {
   Cleanups.pushCleanup<ReleaseValueCleanup>(valueOrAddr);
   return Cleanups.getTopCleanup();
-}
-
-PostponedCleanup::PostponedCleanup(SILGenFunction &sgf, bool recursive)
-    : depth(sgf.Cleanups.innermostScope), SGF(sgf),
-      previouslyActiveCleanup(sgf.CurrentlyActivePostponedCleanup),
-      active(true), applyRecursively(recursive) {
-  SGF.CurrentlyActivePostponedCleanup = this;
-}
-
-PostponedCleanup::PostponedCleanup(SILGenFunction &sgf)
-    : depth(sgf.Cleanups.innermostScope), SGF(sgf),
-      previouslyActiveCleanup(sgf.CurrentlyActivePostponedCleanup),
-      active(true),
-      applyRecursively(previouslyActiveCleanup
-                           ? previouslyActiveCleanup->applyRecursively
-                           : false) {
-  SGF.CurrentlyActivePostponedCleanup = this;
-}
-
-PostponedCleanup::~PostponedCleanup() {
-  if (active) {
-    end();
-  }
-}
-
-void PostponedCleanup::end() {
-  if (previouslyActiveCleanup && applyRecursively &&
-      previouslyActiveCleanup->applyRecursively) {
-    previouslyActiveCleanup->deferredCleanups.append(deferredCleanups.begin(),
-                                                     deferredCleanups.end());
-  }
-
-  SGF.CurrentlyActivePostponedCleanup = previouslyActiveCleanup;
-  active = false;
-}
-
-void PostponedCleanup::postponeCleanup(CleanupHandle cleanup,
-                                       SILValue forValue) {
-  deferredCleanups.push_back(std::make_pair(cleanup, forValue));
-}
-
-void SILGenFunction::enterPostponedCleanup(SILValue forValue) {
-  auto handle = enterDestroyCleanup(forValue);
-  if (CurrentlyActivePostponedCleanup)
-    CurrentlyActivePostponedCleanup->postponeCleanup(handle, forValue);
 }
 
 namespace {

@@ -1,5 +1,4 @@
-// RUN: rm -rf %t
-// RUN: mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -emit-module -o %t %s -disable-objc-attr-requires-foundation-module
 // RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -parse-as-library %t/availability.swiftmodule -typecheck -emit-objc-header-path %t/availability.h -import-objc-header %S/../Inputs/empty.h -disable-objc-attr-requires-foundation-module
 // RUN: %FileCheck %s < %t/availability.h
@@ -154,7 +153,7 @@
     @available(macOS 10.10, *)
     @objc init(x _: Int) {}
 
-    var simpleProperty: Int {
+    @objc var simpleProperty: Int {
 	get {
 		return 100
 	    }
@@ -194,7 +193,7 @@ extension Availability {
 
 
   @available(macOS, deprecated: 10.10)
-  var propertyDeprecatedInsideExtension: Int {
+  @objc var propertyDeprecatedInsideExtension: Int {
 	  get {
 		  return 0
 	  }
@@ -209,7 +208,7 @@ extension Availability {
 
 
 @available(macOS 999, *)
-@objc class WholeClassAvailability {
+@objc @objcMembers class WholeClassAvailability {
   func wholeClassAvailability(_: WholeProtoAvailability) {}
 }
 

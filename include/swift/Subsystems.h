@@ -19,6 +19,7 @@
 
 #include "swift/Basic/LLVM.h"
 #include "swift/Basic/OptionSet.h"
+#include "swift/Basic/PrimarySpecificPaths.h"
 #include "swift/Basic/Version.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -45,6 +46,7 @@ namespace swift {
   class DelayedParsingCallbacks;
   class DiagnosticConsumer;
   class DiagnosticEngine;
+  class Evaluator;
   class FileUnit;
   class GenericEnvironment;
   class GenericParamList;
@@ -127,6 +129,7 @@ namespace swift {
   std::vector<Token> tokenize(const LangOptions &LangOpts,
                               const SourceManager &SM, unsigned BufferID,
                               unsigned Offset = 0, unsigned EndOffset = 0,
+                              DiagnosticEngine *Diags = nullptr,
                               bool KeepComments = true,
                               bool TokenizeInterpolatedString = true,
                               ArrayRef<Token> SplitTokens = ArrayRef<Token>());
@@ -137,6 +140,11 @@ namespace swift {
   /// \param StartElem Where to start for incremental name binding in the main
   ///                  source file.
   void performNameBinding(SourceFile &SF, unsigned StartElem = 0);
+
+  /// Once type-checking is complete, this instruments code with calls to an
+  /// intrinsic that record the expected values of local variables so they can
+  /// be compared against the results from the debugger.
+  void performDebuggerTestingTransform(SourceFile &SF);
 
   /// Once parsing and name-binding are complete, this optionally transforms the
   /// ASTs to add calls to external logging functions.
@@ -182,7 +190,8 @@ namespace swift {
                            unsigned StartElem = 0,
                            unsigned WarnLongFunctionBodies = 0,
                            unsigned WarnLongExpressionTypeChecking = 0,
-                           unsigned ExpressionTimeoutThreshold = 0);
+                           unsigned ExpressionTimeoutThreshold = 0,
+                           unsigned SwitchCheckingInvocationThreshold = 0);
 
   /// Now that we have type-checked an entire module, perform any type
   /// checking that requires the full module, e.g., Objective-C method
@@ -259,7 +268,9 @@ namespace swift {
   std::unique_ptr<llvm::Module>
   performIRGeneration(IRGenOptions &Opts, ModuleDecl *M,
                       std::unique_ptr<SILModule> SILMod,
-                      StringRef ModuleName, llvm::LLVMContext &LLVMContext,
+                      StringRef ModuleName, const PrimarySpecificPaths &PSPs,
+                      llvm::LLVMContext &LLVMContext,
+                      ArrayRef<std::string> parallelOutputFilenames,
                       llvm::GlobalVariable **outModuleHash = nullptr);
 
   /// Turn the given Swift module into either LLVM IR or native code
@@ -268,7 +279,8 @@ namespace swift {
   std::unique_ptr<llvm::Module>
   performIRGeneration(IRGenOptions &Opts, SourceFile &SF,
                       std::unique_ptr<SILModule> SILMod,
-                      StringRef ModuleName, llvm::LLVMContext &LLVMContext,
+                      StringRef ModuleName, const PrimarySpecificPaths &PSPs,
+                      llvm::LLVMContext &LLVMContext,
                       unsigned StartElem = 0,
                       llvm::GlobalVariable **outModuleHash = nullptr);
 
@@ -283,8 +295,8 @@ namespace swift {
                                    StringRef OutputPath);
 
   /// Turn the given LLVM module into native code and return true on error.
-  bool performLLVM(IRGenOptions &Opts, ASTContext &Ctx,
-                   llvm::Module *Module,
+  bool performLLVM(IRGenOptions &Opts, ASTContext &Ctx, llvm::Module *Module,
+                   StringRef OutputFilename,
                    UnifiedStatsReporter *Stats=nullptr);
 
   /// Run the LLVM passes. In multi-threaded compilation this will be done for
@@ -331,6 +343,13 @@ namespace swift {
     struct Implementation;
     Implementation &Impl;
   };
+
+  /// Register the type checker's request functions with the evaluator.
+  ///
+  /// Clients that form an ASTContext and will perform any semantic
+  /// queries should call this function after forming the ASTContext.
+  void registerTypeCheckerRequestFunctions(Evaluator &evaluator);
+
 } // end namespace swift
 
 #endif // SWIFT_SUBSYSTEMS_H

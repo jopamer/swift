@@ -29,7 +29,7 @@
 
 namespace swift {
 
-class TypeOwnership {
+class TypeReferenceOwnership {
   enum : uint8_t {
     Weak = 1 << 0,
     Unowned = 1 << 1,
@@ -38,10 +38,10 @@ class TypeOwnership {
 
   uint8_t Data;
 
-  constexpr TypeOwnership(uint8_t Data) : Data(Data) {}
+  constexpr TypeReferenceOwnership(uint8_t Data) : Data(Data) {}
 
 public:
-  constexpr TypeOwnership() : Data(0) {}
+  constexpr TypeReferenceOwnership() : Data(0) {}
 
   bool isWeak() const { return Data & Weak; }
   bool isUnowned() const { return Data & Unowned; }
@@ -60,19 +60,19 @@ public:
 /// itself related info has to be bundled with it.
 class TypeInfo {
   const Metadata *Type;
-  const TypeOwnership Ownership;
+  TypeReferenceOwnership ReferenceOwnership;
 
 public:
-  TypeInfo() : Type(nullptr), Ownership() {}
+  TypeInfo() : Type(nullptr), ReferenceOwnership() {}
 
-  TypeInfo(const Metadata *type, TypeOwnership ownership)
-      : Type(type), Ownership(ownership) {}
+  TypeInfo(const Metadata *type, TypeReferenceOwnership ownership)
+      : Type(type), ReferenceOwnership(ownership) {}
 
   operator const Metadata *() { return Type; }
 
-  bool isWeak() const { return Ownership.isWeak(); }
-  bool isUnowned() const { return Ownership.isUnowned(); }
-  bool isUnmanaged() const { return Ownership.isUnmanaged(); }
+  bool isWeak() const { return ReferenceOwnership.isWeak(); }
+  bool isUnowned() const { return ReferenceOwnership.isUnowned(); }
+  bool isUnmanaged() const { return ReferenceOwnership.isUnmanaged(); }
 };
 
 #if SWIFT_HAS_ISA_MASKING
@@ -190,18 +190,23 @@ public:
   /// Check if a class has a formal superclass in the AST.
   static inline
   bool classHasSuperclass(const ClassMetadata *c) {
-    return (c->SuperClass && c->SuperClass != getRootSuperclass());
+    return  (c->Superclass && c->Superclass != getRootSuperclass());
   }
 
   /// Replace entries of a freshly-instantiated value witness table with more
   /// efficient common implementations where applicable.
+  ///
+  /// All information is taken from the passed-in layout rather than the VWT.
+  /// This is so that we can delay "publishing" the flags in the actual
+  /// value witness table until all required changes have been made.
   ///
   /// For instance, if the value witness table represents a POD type, this will
   /// insert POD value witnesses into the table. The vwtable's flags must have
   /// been initialized before calling this function.
   ///
   /// Returns true if common value witnesses were used, false otherwise.
-  void installCommonValueWitnesses(ValueWitnessTable *vwtable);
+  void installCommonValueWitnesses(const TypeLayout &layout,
+                                   ValueWitnessTable *vwtable);
 
   const Metadata *
   _matchMetadataByMangledTypeName(const llvm::StringRef metadataNameRef,
@@ -312,6 +317,22 @@ public:
       return _buildDemanglingForContext(descriptor, {}, false, Dem);
     }
   };
+
+  /// Check whether a type conforms to a protocol.
+  ///
+  /// \param value - can be null, in which case the question should
+  ///   be answered abstractly if possible
+  /// \param conformance - if non-null, and the protocol requires a
+  ///   witness table, and the type implements the protocol, the witness
+  ///   table will be placed here
+  bool _conformsToProtocol(const OpaqueValue *value,
+                           const Metadata *type,
+                           const ProtocolDescriptor *protocol,
+                           const WitnessTable **conformance);
+
+  void _swift_getFieldAt(
+      const Metadata *type, unsigned index,
+      std::function<void(llvm::StringRef name, FieldType type)> callback);
 
 } // end namespace swift
 

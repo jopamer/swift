@@ -12,14 +12,6 @@
 
 /// A collection that supports efficient random-access index traversal.
 ///
-/// In most cases, it's best to ignore this protocol and use the
-/// `RandomAccessCollection` protocol instead, because it has a more complete
-/// interface.
-@available(*, deprecated, message: "it will be removed in Swift 4.0.  Please use 'RandomAccessCollection' instead")
-public typealias RandomAccessIndexable = RandomAccessCollection
-
-/// A collection that supports efficient random-access index traversal.
-///
 /// Random-access collections can move indices any distance and 
 /// measure the distance between indices in O(1) time. Therefore, the
 /// fundamental difference between random-access and bidirectional collections
@@ -87,7 +79,7 @@ where SubSequence: RandomAccessCollection, Indices: RandomAccessCollection
   ///     print(streetsSlice)
   ///     // Prints "["Channing", "Douglas", "Evarts"]"
   ///
-  ///     let index = streetsSlice.index(of: "Evarts")    // 4
+  ///     let index = streetsSlice.firstIndex(of: "Evarts")    // 4
   ///     print(streets[index!])
   ///     // Prints "Evarts"
   ///
@@ -153,7 +145,7 @@ extension RandomAccessCollection {
   ///   the method returns `nil`.
   ///
   /// - Complexity: O(1)
-  @_inlineable
+  @inlinable
   public func index(
     _ i: Index, offsetBy n: Int, limitedBy limit: Index
   ) -> Index? {
@@ -180,7 +172,7 @@ where Index : Strideable,
 
   /// The indices that are valid for subscripting the collection, in ascending
   /// order.
-  @_inlineable
+  @inlinable
   public var indices: Range<Index> {
     return startIndex..<endIndex
   }
@@ -190,7 +182,7 @@ where Index : Strideable,
   /// - Parameter i: A valid index of the collection. `i` must be less than
   ///   `endIndex`.
   /// - Returns: The index value immediately after `i`.
-  @_inlineable
+  @inlinable
   public func index(after i: Index) -> Index {
     // FIXME: swift-3-indexing-model: tests for the trap.
     _failEarlyRangeCheck(
@@ -203,7 +195,7 @@ where Index : Strideable,
   /// - Parameter i: A valid index of the collection. `i` must be greater than
   ///   `startIndex`.
   /// - Returns: The index value immediately before `i`.
-  @_inlineable // FIXME(sil-serialize-all)
+  @inlinable // FIXME(sil-serialize-all)
   public func index(before i: Index) -> Index {
     let result = i.advanced(by: -1)
     // FIXME: swift-3-indexing-model: tests for the trap.
@@ -234,7 +226,7 @@ where Index : Strideable,
   ///   to `index(before:)`.
   ///
   /// - Complexity: O(1)
-  @_inlineable
+  @inlinable
   public func index(_ i: Index, offsetBy n: Index.Stride) -> Index {
     let result = i.advanced(by: n)
     // This range check is not precise, tighter bounds exist based on `n`.
@@ -256,7 +248,7 @@ where Index : Strideable,
   /// - Returns: The distance between `start` and `end`.
   ///
   /// - Complexity: O(1)
-  @_inlineable
+  @inlinable
   public func distance(from start: Index, to end: Index) -> Index.Stride {
     // FIXME: swift-3-indexing-model: tests for traps.
     _failEarlyRangeCheck(

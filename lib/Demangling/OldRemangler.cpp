@@ -641,6 +641,9 @@ void Remangler::mangleFunctionSignatureSpecializationParam(Node *node) {
     if (kindValue &
         unsigned(FunctionSigSpecializationParamKind::OwnedToGuaranteed))
       Out << 'g';
+    if (kindValue &
+        unsigned(FunctionSigSpecializationParamKind::GuaranteedToOwned))
+      Out << 'o';
     if (kindValue & unsigned(FunctionSigSpecializationParamKind::SROA))
       Out << 's';
     Out << '_';
@@ -702,6 +705,21 @@ void Remangler::mangleTypeMetadataAccessFunction(Node *node) {
   mangleSingleChildNode(node); // type
 }
 
+void Remangler::mangleTypeMetadataInstantiationCache(Node *node) {
+  Out << "MI";
+  mangleSingleChildNode(node); // type
+}
+
+void Remangler::mangleTypeMetadataInstantiationFunction(Node *node) {
+  Out << "Mi";
+  mangleSingleChildNode(node); // type
+}
+
+void Remangler::mangleTypeMetadataCompletionFunction(Node *node) {
+  Out << "Mr";
+  mangleSingleChildNode(node); // type
+}
+
 void Remangler::mangleTypeMetadataLazyCache(Node *node) {
   Out << "ML";
   mangleSingleChildNode(node); // type
@@ -722,6 +740,10 @@ void Remangler::mangleNominalTypeDescriptor(Node *node) {
   mangleSingleChildNode(node); // type
 }
 
+void Remangler::manglePropertyDescriptor(Node *node) {
+  unreachable("not supported");
+}
+
 void Remangler::mangleTypeMetadata(Node *node) {
   Out << "M";
   mangleSingleChildNode(node); // type
@@ -735,6 +757,14 @@ void Remangler::mangleFullTypeMetadata(Node *node) {
 void Remangler::mangleProtocolDescriptor(Node *node) {
   Out << "Mp";
   mangleProtocolWithoutPrefix(node->begin()[0]);
+}
+
+void Remangler::mangleProtocolRequirementArray(Node *node) {
+  unreachable("todo");
+}
+
+void Remangler::mangleProtocolWitnessTablePattern(Node *node) {
+  unreachable("todo");
 }
 
 void Remangler::mangleProtocolConformanceDescriptor(Node *node) {
@@ -792,6 +822,11 @@ void Remangler::mangleFieldOffset(Node *node) {
   mangleChildNodes(node); // directness, entity
 }
 
+void Remangler::mangleEnumCase(Node *node) {
+  Out << "WC";
+  mangleSingleChildNode(node); // enum case
+}
+
 void Remangler::mangleProtocolWitnessTable(Node *node) {
   Out << "WP";
   mangleSingleChildNode(node); // protocol conformance
@@ -800,6 +835,10 @@ void Remangler::mangleProtocolWitnessTable(Node *node) {
 void Remangler::mangleGenericProtocolWitnessTable(Node *node) {
   Out << "WG";
   mangleSingleChildNode(node); // protocol conformance
+}
+
+void Remangler::mangleResilientProtocolWitnessTable(Node *node) {
+  unreachable("todo");
 }
 
 void Remangler::mangleGenericProtocolWitnessTableInstantiationFunction(
@@ -1204,11 +1243,7 @@ void Remangler::mangleBuiltinTypeName(Node *node) {
 }
 
 void Remangler::mangleTypeAlias(Node *node, EntityContext &ctx) {
-  SubstitutionEntry entry;
-  if (trySubstitution(node, entry)) return;
-  Out << 'a';
-  mangleChildNodes(node); // context, identifier
-  addSubstitution(entry);
+  mangleAnyNominalType(node, ctx);
 }
 
 void Remangler::mangleFunctionType(Node *node) {
@@ -1451,6 +1486,11 @@ void Remangler::mangleShared(Node *node) {
   mangleSingleChildNode(node); // type
 }
 
+void Remangler::mangleOwned(Node *node) {
+  Out << 'n';
+  mangleSingleChildNode(node); // type
+}
+
 void Remangler::mangleInOut(Node *node) {
   Out << 'R';
   mangleSingleChildNode(node); // type
@@ -1584,11 +1624,6 @@ void Remangler::mangleAssociatedType(Node *node) {
   }
 }
 
-void Remangler::mangleQualifiedArchetype(Node *node) {
-  Out << "Qq";
-  mangleChildNodes(node); // index, declcontext
-}
-
 void Remangler::mangleDeclContext(Node *node) {
   mangleSingleChildNode(node);
 }
@@ -1713,6 +1748,9 @@ void Remangler::mangleProtocol(Node *node, EntityContext &ctx) {
 }
 
 void Remangler::mangleProtocolWithoutPrefix(Node *node) {
+  if (mangleStandardSubstitution(node))
+    return;
+
   if (node->getKind() == Node::Kind::Type) {
     assert(node->getNumChildren() == 1);
     node = node->begin()[0];
@@ -1782,6 +1820,9 @@ void Remangler::mangleAnyNominalType(Node *node, EntityContext &ctx) {
   case Node::Kind::Class:
     mangleNominalType(node, 'C', ctx);
     break;
+  case Node::Kind::TypeAlias:
+    mangleNominalType(node, 'a', ctx);
+    break;
   default:
     unreachable("bad nominal type kind");
   }
@@ -1827,6 +1868,16 @@ void Remangler::mangleBoundGenericEnum(Node *node) {
 }
 
 void Remangler::mangleBoundGenericOtherNominalType(Node *node) {
+  EntityContext ctx;
+  mangleAnyNominalType(node, ctx);
+}
+
+void Remangler::mangleBoundGenericProtocol(Node *node) {
+  EntityContext ctx;
+  mangleAnyNominalType(node, ctx);
+}
+
+void Remangler::mangleBoundGenericTypeAlias(Node *node) {
   EntityContext ctx;
   mangleAnyNominalType(node, ctx);
 }

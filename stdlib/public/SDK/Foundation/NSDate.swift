@@ -12,7 +12,7 @@
 
 @_exported import Foundation // Clang module
 
-extension NSDate : CustomPlaygroundQuickLookable {
+extension NSDate : _CustomPlaygroundQuickLookable {
   @nonobjc
   var summary: String {
     let df = DateFormatter()
@@ -21,6 +21,7 @@ extension NSDate : CustomPlaygroundQuickLookable {
     return df.string(from: self as Date)
   }
 
+  @available(*, deprecated, message: "NSDate.customPlaygroundQuickLook will be removed in a future Swift version")
   public var customPlaygroundQuickLook: PlaygroundQuickLook {
     return .text(summary)
   }

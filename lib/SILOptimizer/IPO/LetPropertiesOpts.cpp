@@ -19,9 +19,10 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "let-properties-opt"
-#include "swift/SIL/SILInstruction.h"
-#include "swift/SIL/SILBasicBlock.h"
 #include "swift/SIL/DebugUtils.h"
+#include "swift/SIL/InstructionUtils.h"
+#include "swift/SIL/SILBasicBlock.h"
+#include "swift/SIL/SILInstruction.h"
 #include "swift/SIL/SILLinkage.h"
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "swift/SILOptimizer/PassManager/Transforms.h"
@@ -201,7 +202,10 @@ void LetPropertiesOpt::optimizeLetPropertyAccess(VarDecl *Property,
     };
 
     // Look for any instructions accessing let properties.
-    if (auto proj = dyn_cast<RefElementAddrInst>(Load)) {
+    if (isa<RefElementAddrInst>(Load) || isa<StructElementAddrInst>(Load)
+        || isa<BeginAccessInst>(Load)) {
+      auto proj = cast<SingleValueInstruction>(Load);
+
       // Copy the initializer into the function
       // Replace the access to a let property by the value
       // computed by this initializer.
@@ -210,6 +214,14 @@ void LetPropertiesOpt::optimizeLetPropertyAccess(VarDecl *Property,
       for (auto UI = proj->use_begin(), E = proj->use_end(); UI != E;) {
         auto *User = UI->getUser();
         ++UI;
+
+        if (isIncidentalUse(User))
+          continue;
+
+        // A nested begin_access will be mapped as a separate "Load".
+        if (isa<BeginAccessInst>(User))
+          continue;
+
         if (isa<StoreInst>(User))
           continue;
 
@@ -230,23 +242,6 @@ void LetPropertiesOpt::optimizeLetPropertyAccess(VarDecl *Property,
 
       proj->eraseFromParent();
       ++NumReplaced;
-      ChangedFunctions.insert(F);
-    }  else if (auto proj = dyn_cast<StructElementAddrInst>(Load)) {
-      // Copy the initializer into the function
-      // Replace the access to a let property by the value
-      // computed by this initializer.
-      SILValue clonedInit = cloneInitAt(proj);
-      SILBuilderWithScope B(proj);
-      for (auto UI = proj->use_begin(), E = proj->use_end(); UI != E;) {
-        auto *User = UI->getUser();
-        ++UI;
-        if (isa<StoreInst>(User))
-          continue;
-        replaceLoadSequence(User, clonedInit, B);
-        eraseUsesOfInstruction(User);
-        User->eraseFromParent();
-        ++NumReplaced;
-      }
       ChangedFunctions.insert(F);
     }
   }
@@ -289,28 +284,7 @@ static bool isSameInitSequence(const InitSequence &LHS,
 
 /// Check if a given let property can be assigned externally.
 static bool isAssignableExternally(VarDecl *Property, SILModule *Module) {
-  AccessLevel access = Property->getEffectiveAccess();
-  SILLinkage linkage;
-  switch (access) {
-  case AccessLevel::Private:
-  case AccessLevel::FilePrivate:
-    linkage = SILLinkage::Private;
-    DEBUG(llvm::dbgs() << "Property " << *Property << " has private access\n");
-    break;
-  case AccessLevel::Internal:
-    linkage = SILLinkage::Hidden;
-    DEBUG(llvm::dbgs() << "Property " << *Property << " has internal access\n");
-    break;
-  case AccessLevel::Public:
-  case AccessLevel::Open:
-    linkage = SILLinkage::Public;
-    DEBUG(llvm::dbgs() << "Property " << *Property << " has public access\n");
-    break;
-  }
-
-  DEBUG(llvm::dbgs() << "Module of " << *Property << " WMO mode is: " << Module->isWholeModule() << "\n");
-
-  if (isPossiblyUsedExternally(linkage, Module->isWholeModule())) {
+  if (Module->isVisibleExternally(Property)) {
     // If at least one of the properties of the enclosing type cannot be
     // used externally, then no initializer can be implemented externally as
     // it wouldn't be able to initialize such a property.
@@ -422,7 +396,7 @@ LetPropertiesOpt::analyzeInitValue(SILInstruction *I, VarDecl *Property) {
   if (auto SI = dyn_cast<StructInst>(I)) {
     value = SI->getFieldValue(Property);
   } else if (auto SI = dyn_cast<StoreInst>(I)) {
-    auto Dest = SI->getDest();
+    auto Dest = stripAddressAccess(SI->getDest());
 
     assert(((isa<RefElementAddrInst>(Dest) &&
              cast<RefElementAddrInst>(Dest)->getField() == Property) ||
@@ -524,9 +498,12 @@ static bool isValidPropertyLoad(SILInstruction *I) {
 
   if (isa<StructElementAddrInst>(I) || isa<TupleElementAddrInst>(I)) {
     auto projection = cast<SingleValueInstruction>(I);
-    for (auto Use : getNonDebugUses(projection))
+    for (auto Use : getNonDebugUses(projection)) {
+      if (isIncidentalUse(Use->getUser()))
+        continue;
       if (!isValidPropertyLoad(Use->getUser()))
         return false;
+    }
     return true;
   }
 
@@ -545,11 +522,19 @@ void LetPropertiesOpt::collectPropertyAccess(SILInstruction *I,
                      << "':\n";
         llvm::dbgs() << "The instructions are:\n"; I->dumpInContext());
 
-  if (isa<RefElementAddrInst>(I) || isa<StructElementAddrInst>(I)) {
+  if (isa<RefElementAddrInst>(I) || isa<StructElementAddrInst>(I)
+      || isa<BeginAccessInst>(I)) {
     // Check if there is a store to this property.
     auto projection = cast<SingleValueInstruction>(I);
     for (auto Use : getNonDebugUses(projection)) {
       auto *User = Use->getUser();
+      if (isIncidentalUse(User))
+        continue;
+
+      // Each begin_access is analyzed as a separate property access. Do not
+      // consider a begin_access a use of the current projection.
+      if (isa<BeginAccessInst>(User))
+        continue;
 
       if (auto *SI = dyn_cast<StoreInst>(User)) {
         // There is a store into this property.
@@ -595,7 +580,12 @@ void LetPropertiesOpt::run(SILModuleTransform *T) {
         // It includes referencing this specific property (both reads and
         // stores), as well as implicit stores by means of e.g.
         // a struct instruction.
-        if (auto *REAI = dyn_cast<RefElementAddrInst>(&I)) {
+        if (auto *BAI = dyn_cast<BeginAccessInst>(&I)) {
+          if (auto *REAI =
+                  dyn_cast<RefElementAddrInst>(stripAddressAccess(BAI))) {
+            collectPropertyAccess(BAI, REAI->getField(), NonRemovable);
+          }
+        } else if (auto *REAI = dyn_cast<RefElementAddrInst>(&I)) {
           collectPropertyAccess(REAI, REAI->getField(), NonRemovable);
         } else if (auto *SEI = dyn_cast<StructExtractInst>(&I)) {
           collectPropertyAccess(SEI, SEI->getField(), NonRemovable);

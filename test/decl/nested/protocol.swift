@@ -52,12 +52,10 @@ protocol Racoon {
 }
 
 enum SillyRawEnum : SillyProtocol.InnerClass {}
-// expected-error@-1 {{reference to generic type 'SillyProtocol.InnerClass' requires arguments in <...>}}
-// expected-error@-2 {{type 'SillyRawEnum' does not conform to protocol 'RawRepresentable'}}
+// expected-error@-1 {{type 'SillyRawEnum' does not conform to protocol 'RawRepresentable'}}
 
 protocol SillyProtocol {
   class InnerClass<T> {} // expected-error {{type 'InnerClass' cannot be nested in protocol 'SillyProtocol'}}
-  // expected-note@-1 {{generic type 'InnerClass' declared here}}
 }
 
 enum OuterEnum {
@@ -68,12 +66,10 @@ enum OuterEnum {
 
 class OuterClass {
   protocol InnerProtocol : OuterClass { }
-  // expected-error@-1{{non-class type 'InnerProtocol' cannot inherit from class 'OuterClass'}}
-  // expected-error@-2{{protocol 'InnerProtocol' cannot be nested inside another declaration}}
+  // expected-error@-1{{protocol 'InnerProtocol' cannot be nested inside another declaration}}
 }
 
 class OtherGenericClass<T> {
   protocol InnerProtocol : OtherGenericClass { }
-  // expected-error@-1{{non-class type 'InnerProtocol' cannot inherit from class 'OtherGenericClass<T>'}}
-  // expected-error@-2{{protocol 'InnerProtocol' cannot be nested inside another declaration}}
+  // expected-error@-1{{protocol 'InnerProtocol' cannot be nested inside another declaration}}
 }

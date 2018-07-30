@@ -15,7 +15,6 @@
 // RUN: %target-run %t/TestData
 // REQUIRES: executable_test
 // REQUIRES: objc_interop
-// UNSUPPORTED: resilient_stdlib
 
 import Foundation
 import Dispatch
@@ -258,8 +257,7 @@ class TestData : TestDataSuper {
             // Mutate it
             bytes.pointee = 0x67
             expectEqual(bytes.pointee, 0x67, "First byte should be 0x67")
-            expectEqual(mutatingHello[0], 0x67, "First byte accessed via other method should still be 0x67")
-            
+
             // Verify that the first data is still correct
             expectEqual(hello[0], 0x68, "The first byte should still be 0x68")
         }
@@ -284,7 +282,6 @@ class TestData : TestDataSuper {
             // Mutate the second data
             bytes.pointee = 0
             expectEqual(bytes.pointee, 0, "First byte should be 0")
-            expectEqual(allOnesCopyToMutate[0], 0, "First byte accessed via other method should still be 0")
             
             // Verify that the first data is still 1
             expectEqual(allOnesData[0], 1, "The first byte should still be 1")
@@ -3741,6 +3738,14 @@ class TestData : TestDataSuper {
 
         expectEqual(Data(bytes: [4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5]), t)
     }
+
+    func test_rangeOfSlice() {
+        let data = "FooBar".data(using: .ascii)!
+        let slice = data[3...] // Bar
+
+        let range = slice.range(of: "a".data(using: .ascii)!)
+        expectEqual(range, Range<Data.Index>(4..<5))
+    }
 }
 
 #if !FOUNDATION_XCTEST
@@ -4058,6 +4063,7 @@ DataTests.test("test_validateMutation_slice_mutableBacking_withUnsafeMutableByte
 DataTests.test("test_validateMutation_slice_customBacking_withUnsafeMutableBytes_lengthLessThanLowerBound") { TestData().test_validateMutation_slice_customBacking_withUnsafeMutableBytes_lengthLessThanLowerBound() }
 DataTests.test("test_validateMutation_slice_customMutableBacking_withUnsafeMutableBytes_lengthLessThanLowerBound") { TestData().test_validateMutation_slice_customMutableBacking_withUnsafeMutableBytes_lengthLessThanLowerBound() }
 DataTests.test("test_byte_access_of_discontiguousData") { TestData().test_byte_access_of_discontiguousData() }
+DataTests.test("test_rangeOfSlice") { TestData().test_rangeOfSlice() }
 
 // XCTest does not have a crash detection, whereas lit does
 DataTests.test("bounding failure subdata") {

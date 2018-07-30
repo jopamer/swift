@@ -12,6 +12,7 @@
 
 #include "swift/Basic/Range.h"
 #include "swift/Runtime/Metadata.h"
+#include "swift/Runtime/Portability.h"
 #include "swift/Strings.h"
 #include "Private.h"
 
@@ -150,17 +151,23 @@ swift::_buildDemanglingForContext(const ContextDescriptor *context,
         
         // Override the node kind if this is a Clang-imported type so we give it
         // a stable mangling.
-        auto typeFlags = type->Flags.getKindSpecificFlags();
-        if (typeFlags & (uint16_t)TypeContextDescriptorFlags::IsCTag) {
+        auto typeFlags = type->getTypeContextDescriptorFlags();
+        if (typeFlags.isCTag()) {
           nodeKind = Node::Kind::Structure;
-        } else if (typeFlags & (uint16_t)TypeContextDescriptorFlags::IsCTypedef) {
+        } else if (typeFlags.isCTypedef()) {
           nodeKind = Node::Kind::TypeAlias;
         }
         
         auto typeNode = Dem.createNode(nodeKind);
         typeNode->addChild(node, Dem);
-        auto identifier = Dem.createNode(Node::Kind::Identifier, name);
-        typeNode->addChild(identifier, Dem);
+        auto nameNode = Dem.createNode(Node::Kind::Identifier, name);
+        if (type->isSynthesizedRelatedEntity()) {
+          auto relatedName = Dem.createNode(Node::Kind::RelatedEntityDeclName,
+                                    type->getSynthesizedDeclRelatedEntityTag());
+          relatedName->addChild(nameNode, Dem);
+          nameNode = relatedName;
+        }
+        typeNode->addChild(nameNode, Dem);
         node = typeNode;
         
         // Apply generic arguments if the context is generic.
@@ -262,7 +269,7 @@ _buildDemanglingForNominalType(const Metadata *type, Demangle::Demangler &Dem) {
 #if SWIFT_OBJC_INTEROP
     // Peek through artificial subclasses.
     while (classType->isTypeMetadata() && classType->isArtificialSubclass())
-      classType = classType->SuperClass;
+      classType = classType->Superclass;
 #endif
     description = classType->getDescription();
     break;
@@ -276,6 +283,11 @@ _buildDemanglingForNominalType(const Metadata *type, Demangle::Demangler &Dem) {
   case MetadataKind::Struct: {
     auto structType = static_cast<const StructMetadata *>(type);
     description = structType->Description;
+    break;
+  }
+  case MetadataKind::ForeignClass: {
+    auto foreignType = static_cast<const ForeignClassMetadata *>(type);
+    description = foreignType->Description;
     break;
   }
   default:
@@ -348,6 +360,7 @@ swift::_swift_buildDemanglingForMetadata(const Metadata *type,
   case MetadataKind::Enum:
   case MetadataKind::Optional:
   case MetadataKind::Struct:
+  case MetadataKind::ForeignClass:
     return _buildDemanglingForNominalType(type, Dem);
   case MetadataKind::ObjCClassWrapper: {
 #if SWIFT_OBJC_INTEROP
@@ -365,10 +378,6 @@ swift::_swift_buildDemanglingForMetadata(const Metadata *type,
     assert(false && "no ObjC interop");
     return nullptr;
 #endif
-  }
-  case MetadataKind::ForeignClass: {
-    auto foreign = static_cast<const ForeignClassMetadata *>(type);
-    return Dem.demangleType(foreign->getName());
   }
   case MetadataKind::Existential: {
     auto exis = static_cast<const ExistentialTypeMetadata *>(type);
@@ -494,14 +503,24 @@ swift::_swift_buildDemanglingForMetadata(const Metadata *type,
       auto flags = func->getParameterFlags(i);
       auto input = _swift_buildDemanglingForMetadata(param, Dem);
 
-      if (flags.isInOut()) {
-        NodePointer inout = Dem.createNode(Node::Kind::InOut);
-        inout->addChild(input, Dem);
-        input = inout;
-      } else if (flags.isShared()) {
-        NodePointer shared = Dem.createNode(Node::Kind::Shared);
-        shared->addChild(input, Dem);
-        input = shared;
+      auto wrapInput = [&](Node::Kind kind) {
+        auto parent = Dem.createNode(kind);
+        parent->addChild(input, Dem);
+        input = parent;
+      };
+      switch (flags.getValueOwnership()) {
+      case ValueOwnership::Default:
+        /* nothing */
+        break;
+      case ValueOwnership::InOut:
+        wrapInput(Node::Kind::InOut);
+        break;
+      case ValueOwnership::Shared:
+        wrapInput(Node::Kind::Shared);
+        break;
+      case ValueOwnership::Owned:
+        wrapInput(Node::Kind::Owned);
+        break;
       }
 
       inputs.push_back({input, flags.isVariadic()});
@@ -618,19 +637,64 @@ swift::_swift_buildDemanglingForMetadata(const Metadata *type,
     }
     return tupleNode;
   }
-  case MetadataKind::Opaque: {
-    if (auto builtinType = _buildDemanglerForBuiltinType(type, Dem))
-      return builtinType;
-
-    // FIXME: Some opaque types do have manglings, but we don't have enough info
-    // to figure them out.
-    break;
-  }
   case MetadataKind::HeapLocalVariable:
   case MetadataKind::HeapGenericLocalVariable:
   case MetadataKind::ErrorObject:
     break;
+  case MetadataKind::Opaque:
+  default: {
+    if (auto builtinType = _buildDemanglerForBuiltinType(type, Dem))
+      return builtinType;
+    
+    // FIXME: Some opaque types do have manglings, but we don't have enough info
+    // to figure them out.
+    break;
+  }
   }
   // Not a type.
   return nullptr;
+}
+
+// NB: This function is not used directly in the Swift codebase, but is
+// exported for Xcode support and is used by the sanitizers. Please coordinate
+// before changing.
+char *swift_demangle(const char *mangledName,
+                     size_t mangledNameLength,
+                     char *outputBuffer,
+                     size_t *outputBufferSize,
+                     uint32_t flags) {
+  if (flags != 0) {
+    swift::fatalError(0, "Only 'flags' value of '0' is currently supported.");
+  }
+  if (outputBuffer != nullptr && outputBufferSize == nullptr) {
+    swift::fatalError(0, "'outputBuffer' is passed but the size is 'nullptr'.");
+  }
+
+  // Check if we are dealing with Swift mangled name, otherwise, don't try
+  // to demangle and send indication to the user.
+  if (!Demangle::isSwiftSymbol(mangledName))
+    return nullptr; // Not a mangled name
+
+  // Demangle the name.
+  auto options = Demangle::DemangleOptions();
+  options.DisplayDebuggerGeneratedModule = false;
+  auto result =
+      Demangle::demangleSymbolAsString(mangledName,
+                                       mangledNameLength,
+                                       options);
+
+  // If the output buffer is not provided, malloc memory ourselves.
+  if (outputBuffer == nullptr || *outputBufferSize == 0) {
+    return strdup(result.c_str());
+  }
+
+  // Indicate a failure if the result does not fit and will be truncated
+  // and set the required outputBufferSize.
+  if (*outputBufferSize < result.length() + 1) {
+    *outputBufferSize = result.length() + 1;
+  }
+
+  // Copy into the provided buffer.
+  _swift_strlcpy(outputBuffer, result.c_str(), *outputBufferSize);
+  return outputBuffer;
 }

@@ -53,6 +53,9 @@ Globals
   global ::= type 'MP'                   // type metadata pattern
   global ::= type 'Ma'                   // type metadata access function
   global ::= type 'ML'                   // type metadata lazy cache variable
+  global ::= nominal-type 'Mr'           // generic type completion function
+  global ::= nominal-type 'Mi'           // generic type instantiation function
+  global ::= nominal-type 'MI'           // generic type instantiation cache
   global ::= nominal-type 'Mm'           // class metaclass
   global ::= nominal-type 'Mn'           // nominal type descriptor
   global ::= module 'MXM'                // module descriptor
@@ -60,9 +63,11 @@ Globals
   global ::= context 'MXX'               // anonymous context descriptor
   global ::= context identifier 'MXY'    // anonymous context descriptor
   global ::= type assoc_type_path 'MXA'  // generic parameter ref
-  global ::= nominal-type 'Mo'           // class metadata immediate member base offset
   global ::= protocol 'Mp'               // protocol descriptor
-  global ::= protocol-conformance 'Mc'   // protocol conformance descriptor
+  global ::= protocol 'WR'               // protocol requirement table
+
+  global ::= nominal-type 'Mo'           // class metadata immediate member base offset
+
   global ::= type 'MF'                   // metadata for remote mirrors: field descriptor
   global ::= type 'MB'                   // metadata for remote mirrors: builtin type descriptor
   global ::= protocol-conformance 'MA'   // metadata for remote mirrors: associated type descriptor
@@ -73,33 +78,26 @@ Globals
   global ::= mangled-name 'Ta'                     // ObjC partial application forwarder
 
   global ::= type 'w' VALUE-WITNESS-KIND // value witness
+
+  global ::= protocol-conformance 'Mc'   // protocol conformance descriptor
+  global ::= protocol-conformance 'WP'   // protocol witness table
   global ::= protocol-conformance 'Wa'   // protocol witness table accessor
+
   global ::= protocol-conformance 'WG'   // generic protocol witness table
+  global ::= protocol-conformance 'Wp'   // protocol witness table pattern
+  global ::= protocol-conformance 'Wr'   // resilient witness table
   global ::= protocol-conformance 'WI'   // generic protocol witness table instantiation function
   global ::= type protocol-conformance 'WL'   // lazy protocol witness table cache variable
-  global ::= entity 'Wo'                 // witness table offset
-  global ::= protocol-conformance 'WP'   // protocol witness table
 
   global ::= protocol-conformance identifier 'Wt' // associated type metadata accessor
   global ::= protocol-conformance assoc_type_path nominal-type 'WT' // associated type witness table accessor
   global ::= type protocol-conformance 'Wl' // lazy protocol witness table accessor
-  global ::= type 'WV'                   // value witness table
-  global ::= entity 'Wv' DIRECTNESS      // field offset
 
-  global ::= type 'Wy' // Outlined Copy Function Type
-  global ::= type 'We' // Outlined Consume Function Type
-  global ::= type 'Wr' // Outlined Retain Function Type
-  global ::= type 'Ws' // Outlined Release Function Type
-  global ::= type 'Wb' INDEX // Outlined InitializeWithTake Function Type
-  global ::= type 'Wc' INDEX // Outlined InitializeWithCopy Function Type
-  global ::= type 'Wd' INDEX // Outlined AssignWithTake Function Type
-  global ::= type 'Wf' INDEX // Outlined AssignWithCopy Function Type
-  global ::= type 'Wh' INDEX // Outlined Destroy Function Type
+  global ::= type 'WV'                   // value witness table
+  global ::= entity 'Wvd'                // field offset
+  global ::= entity 'WC'                 // resilient enum tag index
 
   assoc_type_path ::= identifier '_' identifier*
-
-  DIRECTNESS ::= 'd'                         // direct
-  DIRECTNESS ::= 'i'                         // indirect
 
 A direct symbol resolves directly to the address of an object.  An
 indirect symbol resolves to the address of a pointer to the object.
@@ -171,6 +169,18 @@ The types in a reabstraction thunk helper function are always non-polymorphic
 ``<VALUE-WITNESS-KIND>`` differentiates the kinds of value
 witness functions for a type.
 
+::
+
+  global ::= generic-signature? type 'WOy' // Outlined copy
+  global ::= generic-signature? type 'WOe' // Outlined consume
+  global ::= generic-signature? type 'WOr' // Outlined retain
+  global ::= generic-signature? type 'WOs' // Outlined release
+  global ::= generic-signature? type 'WOb' // Outlined initializeWithTake
+  global ::= generic-signature? type 'WOc' // Outlined initializeWithCopy
+  global ::= generic-signature? type 'WOd' // Outlined assignWithTake
+  global ::= generic-signature? type 'WOf' // Outlined assignWithCopy
+  global ::= generic-signature? type 'WOh' // Outlined destroy
+
 Entities
 ~~~~~~~~
 
@@ -205,6 +215,7 @@ Entities
   entity-spec ::= decl-name label-list? type 'v' ACCESSOR                           // variable
   entity-spec ::= decl-name type 'fp'                                               // generic type parameter
   entity-spec ::= decl-name type 'fo'                                               // enum element (currently not used)
+  entity-spec ::= identifier 'Qa'                                                   // associated type declaration
 
   ACCESSOR ::= 'm'                           // materializeForSet
   ACCESSOR ::= 's'                           // setter
@@ -318,27 +329,63 @@ Types
   any-generic-type ::= protocol 'P'              // nominal protocol type
   any-generic-type ::= context decl-name 'a'     // typealias type (used in DWARF and USRs)
 
-  any-generic-type ::= 'S' KNOWN-TYPE-KIND       // known nominal type substitution
-  any-generic-type ::= 'S' NATURAL KNOWN-TYPE-KIND    // repeated known type substitutions of the same kind
+  any-generic-type ::= standard-substitutions
+  
+  standard-substitutions ::= 'S' KNOWN-TYPE-KIND       // known nominal type substitution
+  standard-substitutions ::= 'S' NATURAL KNOWN-TYPE-KIND    // repeated known type substitutions of the same kind
 
+  KNOWN-TYPE-KIND ::= 'A'                    // Swift.AutoreleasingUnsafeMutablePointer
   KNOWN-TYPE-KIND ::= 'a'                    // Swift.Array
+  KNOWN-TYPE-KIND ::= 'B'                    // Swift.BinaryFloatingPoint
   KNOWN-TYPE-KIND ::= 'b'                    // Swift.Bool
   KNOWN-TYPE-KIND ::= 'c'                    // Swift.UnicodeScalar
+  KNOWN-TYPE-KIND ::= 'D'                    // Swift.Dictionary
   KNOWN-TYPE-KIND ::= 'd'                    // Swift.Float64
+  KNOWN-TYPE-KIND ::= 'E'                    // Swift.Encodable
+  KNOWN-TYPE-KIND ::= 'e'                    // Swift.Decodable
+  KNOWN-TYPE-KIND ::= 'F'                    // Swift.FloatingPoint
   KNOWN-TYPE-KIND ::= 'f'                    // Swift.Float32
+  KNOWN-TYPE-KIND ::= 'G'                    // Swift.RandomNumberGenerator
+  KNOWN-TYPE-KIND ::= 'H'                    // Swift.Hashable
+  KNOWN-TYPE-KIND ::= 'h'                    // Swift.Set
+  KNOWN-TYPE-KIND ::= 'I'                    // Swift.DefaultIndices
   KNOWN-TYPE-KIND ::= 'i'                    // Swift.Int
-  KNOWN-TYPE-KIND ::= 'V'                    // Swift.UnsafeRawPointer
-  KNOWN-TYPE-KIND ::= 'v'                    // Swift.UnsafeMutableRawPointer
+  KNOWN-TYPE-KIND ::= 'J'                    // Swift.Character
+  KNOWN-TYPE-KIND ::= 'j'                    // Swift.Numeric
+  KNOWN-TYPE-KIND ::= 'K'                    // Swift.BidirectionalCollection
+  KNOWN-TYPE-KIND ::= 'k'                    // Swift.RandomAccessCollection
+  KNOWN-TYPE-KIND ::= 'L'                    // Swift.Comparable
+  KNOWN-TYPE-KIND ::= 'l'                    // Swift.Collection
+  KNOWN-TYPE-KIND ::= 'M'                    // Swift.MutableCollection
+  KNOWN-TYPE-KIND ::= 'm'                    // Swift.RangeReplaceableCollection
+  KNOWN-TYPE-KIND ::= 'N'                    // Swift.ClosedRange
+  KNOWN-TYPE-KIND ::= 'n'                    // Swift.Range
+  KNOWN-TYPE-KIND ::= 'O'                    // Swift.ObjectIdentifier
   KNOWN-TYPE-KIND ::= 'P'                    // Swift.UnsafePointer
   KNOWN-TYPE-KIND ::= 'p'                    // Swift.UnsafeMutablePointer
-  KNOWN-TYPE-KIND ::= 'Q'                    // Swift.ImplicitlyUnwrappedOptional
+  KNOWN-TYPE-KIND ::= 'Q'                    // Swift.Equatable
   KNOWN-TYPE-KIND ::= 'q'                    // Swift.Optional
   KNOWN-TYPE-KIND ::= 'R'                    // Swift.UnsafeBufferPointer
   KNOWN-TYPE-KIND ::= 'r'                    // Swift.UnsafeMutableBufferPointer
   KNOWN-TYPE-KIND ::= 'S'                    // Swift.String
+  KNOWN-TYPE-KIND ::= 's'                    // Swift.Substring
+  KNOWN-TYPE-KIND ::= 'T'                    // Swift.Sequence
+  KNOWN-TYPE-KIND ::= 't'                    // Swift.IteratorProtocol
+  KNOWN-TYPE-KIND ::= 'U'                    // Swift.UnsignedInteger
   KNOWN-TYPE-KIND ::= 'u'                    // Swift.UInt
+  KNOWN-TYPE-KIND ::= 'V'                    // Swift.UnsafeRawPointer
+  KNOWN-TYPE-KIND ::= 'v'                    // Swift.UnsafeMutableRawPointer
+  KNOWN-TYPE-KIND ::= 'W'                    // Swift.UnsafeRawBufferPointer
+  KNOWN-TYPE-KIND ::= 'w'                    // Swift.UnsafeMutableRawBufferPointer
+  KNOWN-TYPE-KIND ::= 'X'                    // Swift.RangeExpression
+  KNOWN-TYPE-KIND ::= 'x'                    // Swift.Strideable
+  KNOWN-TYPE-KIND ::= 'Y'                    // Swift.RawRepresentable
+  KNOWN-TYPE-KIND ::= 'y'                    // Swift.StringProtocol
+  KNOWN-TYPE-KIND ::= 'Z'                    // Swift.SignedInteger
+  KNOWN-TYPE-KIND ::= 'z'                    // Swift.BinaryInteger
 
   protocol ::= context decl-name
+  protocol ::= standard-substitutions
 
   type ::= 'Bb'                              // Builtin.BridgeObject
   type ::= 'BB'                              // Builtin.UnsafeValueBuffer
@@ -393,7 +440,7 @@ Types
   type-list ::= empty-list
 
                                                   // FIXME: Consider replacing 'h' with a two-char code
-  list-type ::= type identifier? 'z'? 'h'? 'd'?   // type with optional label, inout convention, shared convention, and variadic specifier
+  list-type ::= type identifier? 'z'? 'h'? 'n'? 'd'?   // type with optional label, inout convention, shared convention, owned convention, and variadic specifier
 
   METATYPE-REPR ::= 't'                      // Thin metatype representation
   METATYPE-REPR ::= 'T'                      // Thick metatype representation
@@ -420,7 +467,6 @@ Types
 
   assoc-type-list ::= assoc-type-name '_' assoc-type-name*
 
-  archetype ::= context 'Qq' INDEX           // archetype+context (DWARF only)
   archetype ::= associated-type
 
   associated-type ::= substitution
@@ -778,6 +824,7 @@ Some kinds need arguments, which precede ``Tf``.
   ARG-SPEC-KIND ::= 'c'                      // Consumes n 'type' arguments which are closed over types in argument order
                                              // and one 'identifier' argument which is the closure symbol name
   ARG-SPEC-KIND ::= 'p' CONST-PROP           // Constant propagated argument
+  ARG-SPEC-KIND ::= 'e' 'D'? 'G'? 'X'?       // Generic argument, with optional dead, owned=>guaranteed or exploded-specifier
   ARG-SPEC-KIND ::= 'd' 'G'? 'X'?            // Dead argument, with optional owned=>guaranteed or exploded-specifier
   ARG-SPEC-KIND ::= 'g' 'X'?                 // Owned => Guaranteed,, with optional exploded-specifier
   ARG-SPEC-KIND ::= 'x'                      // Exploded

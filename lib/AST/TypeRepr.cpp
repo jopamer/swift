@@ -157,11 +157,12 @@ TypeRepr *CloneVisitor::visitCompoundIdentTypeRepr(CompoundIdentTypeRepr *T) {
 }
 
 TypeRepr *CloneVisitor::visitFunctionTypeRepr(FunctionTypeRepr *T) {
-  return new (Ctx) FunctionTypeRepr(/*FIXME: Clone?*/T->getGenericParams(),
-                                    visit(T->getArgsTypeRepr()),
-                                    T->getThrowsLoc(),
-                                    T->getArrowLoc(),
-                                    visit(T->getResultTypeRepr()));
+  return new (Ctx) FunctionTypeRepr(
+                              /*FIXME: Clone?*/T->getGenericParams(),
+                              cast<TupleTypeRepr>(visit(T->getArgsTypeRepr())),
+                              T->getThrowsLoc(),
+                              T->getArrowLoc(),
+                              visit(T->getResultTypeRepr()));
 }
 
 TypeRepr *CloneVisitor::visitArrayTypeRepr(ArrayTypeRepr *T) {
@@ -224,6 +225,10 @@ TypeRepr *CloneVisitor::visitSharedTypeRepr(SharedTypeRepr *T) {
   return new (Ctx) SharedTypeRepr(visit(T->getBase()), T->getSpecifierLoc());
 }
 
+TypeRepr *CloneVisitor::visitOwnedTypeRepr(OwnedTypeRepr *T) {
+  return new (Ctx) OwnedTypeRepr(visit(T->getBase()), T->getSpecifierLoc());
+}
+
 TypeRepr *CloneVisitor::visitFixedTypeRepr(FixedTypeRepr *T) {
   return new (Ctx) FixedTypeRepr(T->getType(), T->getLoc());
 }
@@ -233,8 +238,8 @@ TypeRepr *CloneVisitor::visitSILBoxTypeRepr(SILBoxTypeRepr *type) {
   SmallVector<TypeRepr *, 4> cloneArgs;
   
   for (auto &field : type->getFields())
-    cloneFields.push_back({field.VarOrLetLoc, field.Mutable,
-                           visit(field.FieldType)});
+    cloneFields.push_back({field.getLoc(), field.isMutable(),
+                           visit(field.getFieldType())});
   for (auto *arg : type->getGenericArguments())
     cloneArgs.push_back(visit(arg));
   
@@ -467,10 +472,15 @@ SILBoxTypeRepr *SILBoxTypeRepr::create(ASTContext &C,
                       SourceLoc RBraceLoc,
                       SourceLoc ArgLAngleLoc, ArrayRef<TypeRepr *> GenericArgs,
                       SourceLoc ArgRAngleLoc) {
-  return new (C) SILBoxTypeRepr(GenericParams,
-                                LBraceLoc, C.AllocateCopy(Fields), RBraceLoc,
-                                ArgLAngleLoc, C.AllocateCopy(GenericArgs),
-                                ArgRAngleLoc);
+  auto size = totalSizeToAlloc<Field, TypeRepr*>(Fields.size(),
+                                                 GenericArgs.size());
+  auto mem = C.Allocate(size, alignof(SILBoxTypeRepr));
+  return new (mem) SILBoxTypeRepr(GenericParams, LBraceLoc, Fields, RBraceLoc,
+                                  ArgLAngleLoc, GenericArgs, ArgRAngleLoc);
+}
+
+SourceLoc FunctionTypeRepr::getStartLocImpl() const {
+  return ArgsTy->getStartLoc();
 }
 
 SourceLoc SILBoxTypeRepr::getStartLocImpl() const {
@@ -557,11 +567,19 @@ void ProtocolTypeRepr::printImpl(ASTPrinter &Printer,
 
 void SpecifierTypeRepr::printImpl(ASTPrinter &Printer,
                                   const PrintOptions &Opts) const {
-  if (getKind() == TypeReprKind::InOut) {
+  switch (getKind()) {
+  case TypeReprKind::InOut:
     Printer.printKeyword("inout");
-  } else {
-    assert((getKind() == TypeReprKind::Shared) && "Unknown kind");
+    break;
+  case TypeReprKind::Shared:
     Printer.printKeyword("shared");
+    break;
+  case TypeReprKind::Owned:
+    Printer.printKeyword("owned");
+    break;
+  default:
+    llvm_unreachable("unknown specifier type repr");
+    break;
   }
   Printer << " ";
   printTypeRepr(Base, Printer, Opts);

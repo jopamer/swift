@@ -43,10 +43,6 @@ extension CMTimeRange {
     return self.isValid && (self.duration == kCMTimeZero)
   }
 
-  public var end: CMTime {
-    return CMTimeRangeGetEnd(self)
-  }
-
   public func union(_ otherRange: CMTimeRange) -> CMTimeRange {
     return CMTimeRangeGetUnion(self, otherRange)
   }
@@ -74,14 +70,13 @@ public func CMTIMERANGE_IS_EMPTY (_ range: CMTimeRange) -> Bool {
   return range.isEmpty
 }
 
-extension CMTimeRange : Equatable {}
-
 // CMTimeRangeEqual
-public func == (range1: CMTimeRange, range2: CMTimeRange) -> Bool {
-  return CMTimeRangeEqual(range1, range2)
+extension CMTimeRange : Equatable {
+  public static func == (range1: CMTimeRange, range2: CMTimeRange) -> Bool {
+    return CMTimeRangeEqual(range1, range2)
+  }
+  
+  public static func != (range1: CMTimeRange, range2: CMTimeRange) -> Bool {
+    return !CMTimeRangeEqual(range1, range2)
+  }  
 }
-
-public func != (range1: CMTimeRange, range2: CMTimeRange) -> Bool {
-  return !CMTimeRangeEqual(range1, range2)
-}
-

@@ -132,8 +132,7 @@ Type TypeBase::mapTypeOutOfContext() {
     SubstFlags::AllowLoweredTypes);
 }
 
-Type GenericEnvironment::QueryInterfaceTypeSubstitutions::operator()(
-                                                SubstitutableType *type) const {
+Type QueryInterfaceTypeSubstitutions::operator()(SubstitutableType *type) const{
   if (auto gp = type->getAs<GenericTypeParamType>()) {
     // Find the index into the parallel arrays of generic parameters and
     // context types.
@@ -148,7 +147,7 @@ Type GenericEnvironment::QueryInterfaceTypeSubstitutions::operator()(
     // If the context type isn't already known, lazily create it.
     Type contextType = self->getContextTypes()[index];
     if (!contextType) {
-      assert(self->Builder && "Missing generic signature builder for lazy query");
+      assert(self->Builder &&"Missing generic signature builder for lazy query");
       auto equivClass =
         self->Builder->resolveEquivalenceClass(
                                   type,
@@ -219,15 +218,31 @@ Type GenericEnvironment::getSugaredType(Type type) const {
   });
 }
 
-SubstitutionList
-GenericEnvironment::getForwardingSubstitutions() const {
+SubstitutionMap GenericEnvironment::getForwardingSubstitutionMap() const {
   auto *genericSig = getGenericSignature();
+  return SubstitutionMap::get(genericSig,
+                              QueryInterfaceTypeSubstitutions(this),
+                              MakeAbstractConformanceForGenericType());
+}
 
-  SubstitutionMap subMap = genericSig->getSubstitutionMap(
+std::pair<Type, ProtocolConformanceRef>
+GenericEnvironment::mapConformanceRefIntoContext(GenericEnvironment *genericEnv,
+                                           Type conformingType,
+                                           ProtocolConformanceRef conformance) {
+  if (!genericEnv)
+    return {conformingType, conformance};
+  
+  return genericEnv->mapConformanceRefIntoContext(conformingType, conformance);
+}
+
+std::pair<Type, ProtocolConformanceRef>
+GenericEnvironment::mapConformanceRefIntoContext(
+                                     Type conformingInterfaceType,
+                                     ProtocolConformanceRef conformance) const {
+  auto contextConformance = conformance.subst(conformingInterfaceType,
     QueryInterfaceTypeSubstitutions(this),
-    MakeAbstractConformanceForGenericType());
-
-  SmallVector<Substitution, 4> result;
-  genericSig->getSubstitutions(subMap, result);
-  return genericSig->getASTContext().AllocateCopy(result);
+    LookUpConformanceInSignature(*getGenericSignature()));
+  
+  auto contextType = mapTypeIntoContext(conformingInterfaceType);
+  return {contextType, contextConformance};
 }

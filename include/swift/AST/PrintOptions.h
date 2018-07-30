@@ -18,6 +18,7 @@
 #include "swift/AST/Identifier.h"
 #include "swift/AST/TypeOrExtensionDecl.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/DenseMap.h"
 #include <limits.h>
 #include <vector>
 
@@ -284,6 +285,7 @@ struct PrintOptions {
     ArgumentOnly,
     MatchSource,
     BothAlways,
+    EnumElement,
   };
 
   /// Whether to print the doc-comment from the conformance if a member decl
@@ -401,6 +403,7 @@ struct PrintOptions {
     result.PrintIfConfig = false;
     result.ShouldQualifyNestedDeclarations =
         QualifyNestedDeclarations::TypesOnly;
+    result.PrintDocumentationComments = false;
     return result;
   }
 
@@ -417,6 +420,7 @@ struct PrintOptions {
     result.ElevateDocCommentFromConformance = true;
     result.ShouldQualifyNestedDeclarations =
         QualifyNestedDeclarations::Always;
+    result.PrintDocumentationComments = true;
     return result;
   }
 
@@ -465,6 +469,7 @@ struct PrintOptions {
     result.PrintForSIL = true;
     result.PrintInSILBody = true;
     result.PreferTypeRepr = false;
+    result.PrintIfConfig = false;
     return result;
   }
 

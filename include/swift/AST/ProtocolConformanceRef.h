@@ -131,8 +131,17 @@ public:
   ProtocolConformanceRef getCanonicalConformanceRef() const;
 
   /// Get any additional requirements that are required for this conformance to
+  /// be satisfied, if they're possible to compute.
+  Optional<ArrayRef<Requirement>> getConditionalRequirementsIfAvailable() const;
+
+  /// Get any additional requirements that are required for this conformance to
   /// be satisfied.
   ArrayRef<Requirement> getConditionalRequirements() const;
+  
+  /// If this is a conformance reference for a protocol that inherits other
+  /// protocols, get a reference to the related conformance for the inherited
+  /// protocol.
+  ProtocolConformanceRef getInheritedConformanceRef(ProtocolDecl *base) const;
 };
 
 } // end namespace swift

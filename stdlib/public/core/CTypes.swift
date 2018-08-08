@@ -109,14 +109,12 @@ public struct OpaquePointer {
   @usableFromInline
   internal var _rawValue: Builtin.RawPointer
 
-  @inlinable // FIXME(sil-serialize-all)
-  @_transparent
+  @usableFromInline @_transparent
   internal init(_ v: Builtin.RawPointer) {
     self._rawValue = v
   }
 
   /// Creates an `OpaquePointer` from a given address in memory.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public init?(bitPattern: Int) {
     if bitPattern == 0 { return nil }
@@ -124,7 +122,6 @@ public struct OpaquePointer {
   }
 
   /// Creates an `OpaquePointer` from a given address in memory.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public init?(bitPattern: UInt) {
     if bitPattern == 0 { return nil }
@@ -132,7 +129,6 @@ public struct OpaquePointer {
   }
 
   /// Converts a typed `UnsafePointer` to an opaque C pointer.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public init<T>(_ from: UnsafePointer<T>) {
     self._rawValue = from._rawValue
@@ -141,7 +137,6 @@ public struct OpaquePointer {
   /// Converts a typed `UnsafePointer` to an opaque C pointer.
   ///
   /// The result is `nil` if `from` is `nil`.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public init?<T>(_ from: UnsafePointer<T>?) {
     guard let unwrapped = from else { return nil }
@@ -149,7 +144,6 @@ public struct OpaquePointer {
   }
 
   /// Converts a typed `UnsafeMutablePointer` to an opaque C pointer.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public init<T>(_ from: UnsafeMutablePointer<T>) {
     self._rawValue = from._rawValue
@@ -158,7 +152,6 @@ public struct OpaquePointer {
   /// Converts a typed `UnsafeMutablePointer` to an opaque C pointer.
   ///
   /// The result is `nil` if `from` is `nil`.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public init?<T>(_ from: UnsafeMutablePointer<T>?) {
     guard let unwrapped = from else { return nil }
@@ -251,7 +244,6 @@ internal func _memcpy(
   let size = UInt64(size)._value
   Builtin.int_memcpy_RawPointer_RawPointer_Int64(
     dest, src, size,
-    /*alignment:*/ Int32()._value,
     /*volatile:*/ false._value)
 }
 
@@ -270,6 +262,5 @@ internal func _memmove(
   let size = UInt64(size)._value
   Builtin.int_memmove_RawPointer_RawPointer_Int64(
     dest, src, size,
-    /*alignment:*/ Int32()._value,
     /*volatile:*/ false._value)
 }

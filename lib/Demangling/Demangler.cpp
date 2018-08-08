@@ -1469,6 +1469,9 @@ NodePointer Demangler::demangleMetatype() {
       return createWithPoppedType(Node::Kind::TypeMetadataInstantiationFunction);
     case 'r':
       return createWithPoppedType(Node::Kind::TypeMetadataCompletionFunction);
+    case 'l':
+      return createWithPoppedType(
+                            Node::Kind::TypeMetadataInPlaceInitializationCache);
     case 'L':
       return createWithPoppedType(Node::Kind::TypeMetadataLazyCache);
     case 'm':
@@ -1731,11 +1734,13 @@ NodePointer Demangler::demangleThunkOrSpecialization() {
       Thunk = addChild(Thunk, popNode(Node::Kind::Type));
       return addChild(Thunk, Ty2);
     }
-    case'g':
+    case 'g':
       return demangleGenericSpecialization(Node::Kind::GenericSpecialization);
-    case'G':
+    case 'G':
       return demangleGenericSpecialization(Node::Kind::
                                           GenericSpecializationNotReAbstracted);
+    case 'i':
+      return demangleGenericSpecialization(Node::Kind::InlinedGenericFunction);
     case'p': {
       NodePointer Spec = demangleSpecAttributes(Node::Kind::
                                                 GenericPartialSpecialization);
@@ -1866,14 +1871,15 @@ NodePointer Demangler::demangleGenericSpecialization(Node::Kind SpecKind) {
   if (!TyList)
     return nullptr;
   for (NodePointer Ty : *TyList) {
-    Spec->addChild(createWithChild(Node::Kind::GenericSpecializationParam, Ty), *this);
+    Spec->addChild(createWithChild(Node::Kind::GenericSpecializationParam, Ty),
+                   *this);
   }
   return Spec;
 }
 
 NodePointer Demangler::demangleFunctionSpecialization() {
   NodePointer Spec = demangleSpecAttributes(
-        Node::Kind::FunctionSignatureSpecialization, /*demangleUniqueID*/ true);
+        Node::Kind::FunctionSignatureSpecialization);
   unsigned ParamIdx = 0;
   while (Spec && !nextIf('_')) {
     Spec = addChild(Spec, demangleFuncSpecParam(ParamIdx));
@@ -2069,24 +2075,14 @@ NodePointer Demangler::addFuncSpecParamNumber(NodePointer Param,
      Node::Kind::FunctionSignatureSpecializationParamPayload, Str));
 }
 
-NodePointer Demangler::demangleSpecAttributes(Node::Kind SpecKind,
-                                              bool demangleUniqueID) {
+NodePointer Demangler::demangleSpecAttributes(Node::Kind SpecKind) {
   bool isFragile = nextIf('q');
 
   int PassID = (int)nextChar() - '0';
   if (PassID < 0 || PassID > 9)
     return nullptr;
 
-  int Idx = -1;
-  if (demangleUniqueID)
-    Idx = demangleNatural();
-
-  NodePointer SpecNd = nullptr;
-  if (Idx >= 0) {
-    SpecNd = createNode(SpecKind, Idx);
-  } else {
-    SpecNd = createNode(SpecKind);
-  }
+  NodePointer SpecNd = createNode(SpecKind);
   if (isFragile)
     SpecNd->addChild(createNode(Node::Kind::SpecializationIsFragile),
                      *this);
@@ -2128,10 +2124,6 @@ NodePointer Demangler::demangleWitness() {
       return createWithChild(
                   Node::Kind::GenericProtocolWitnessTableInstantiationFunction,
                   popProtocolConformance());
-
-    case 'R':
-      return createWithChild(Node::Kind::ProtocolRequirementArray,
-                             popProtocol());
 
     case 'r':
       return createWithChild(Node::Kind::ResilientProtocolWitnessTable,
@@ -2380,6 +2372,8 @@ NodePointer Demangler::demangleAccessor(NodePointer ChildNode) {
     case 'G': Kind = Node::Kind::GlobalGetter; break;
     case 'w': Kind = Node::Kind::WillSet; break;
     case 'W': Kind = Node::Kind::DidSet; break;
+    case 'r': Kind = Node::Kind::ReadAccessor; break;
+    case 'M': Kind = Node::Kind::ModifyAccessor; break;
     case 'a':
       switch (nextChar()) {
         case 'O': Kind = Node::Kind::OwningMutableAddressor; break;

@@ -33,6 +33,7 @@ enum SILStringEncoding : uint8_t {
   SIL_UTF8,
   SIL_UTF16,
   SIL_OBJC_SELECTOR,
+  SIL_BYTES
 };
 
 enum SILLinkageEncoding : uint8_t {
@@ -84,7 +85,6 @@ enum class KeyPathComponentKindEncoding : uint8_t {
   OptionalChain,
   OptionalForce,
   OptionalWrap,
-  External,
   Trivial,
 };
 enum class KeyPathComputedComponentIdKindEncoding : uint8_t {
@@ -180,6 +180,7 @@ namespace sil_block {
       = decls_block::SPECIALIZED_PROTOCOL_CONFORMANCE,
     INHERITED_PROTOCOL_CONFORMANCE
       = decls_block::INHERITED_PROTOCOL_CONFORMANCE,
+    INVALID_PROTOCOL_CONFORMANCE = decls_block::INVALID_PROTOCOL_CONFORMANCE,
     GENERIC_PARAM = decls_block::GENERIC_PARAM,
     GENERIC_REQUIREMENT = decls_block::GENERIC_REQUIREMENT,
     LAYOUT_REQUIREMENT = decls_block::LAYOUT_REQUIREMENT,

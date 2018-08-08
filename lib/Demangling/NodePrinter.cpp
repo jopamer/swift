@@ -16,6 +16,7 @@
 
 #include "swift/Basic/STLExtras.h"
 #include "swift/Demangling/Demangle.h"
+#include "swift/AST/Ownership.h"
 #include "swift/Strings.h"
 #include <cstdio>
 #include <cstdlib>
@@ -350,6 +351,7 @@ private:
     case Node::Kind::GenericSpecialization:
     case Node::Kind::GenericSpecializationNotReAbstracted:
     case Node::Kind::GenericSpecializationParam:
+    case Node::Kind::InlinedGenericFunction:
     case Node::Kind::GenericTypeMetadataPattern:
     case Node::Kind::Getter:
     case Node::Kind::Global:
@@ -379,6 +381,7 @@ private:
     case Node::Kind::MaterializeForSet:
     case Node::Kind::MergedFunction:
     case Node::Kind::Metaclass:
+    case Node::Kind::ModifyAccessor:
     case Node::Kind::NativeOwningAddressor:
     case Node::Kind::NativeOwningMutableAddressor:
     case Node::Kind::NativePinningAddressor:
@@ -400,13 +403,13 @@ private:
     case Node::Kind::ProtocolConformance:
     case Node::Kind::ProtocolConformanceDescriptor:
     case Node::Kind::ProtocolDescriptor:
-    case Node::Kind::ProtocolRequirementArray:
     case Node::Kind::ProtocolWitness:
     case Node::Kind::ProtocolWitnessTable:
     case Node::Kind::ProtocolWitnessTableAccessor:
     case Node::Kind::ProtocolWitnessTablePattern:
     case Node::Kind::ReabstractionThunk:
     case Node::Kind::ReabstractionThunkHelper:
+    case Node::Kind::ReadAccessor:
     case Node::Kind::RelatedEntityDeclName:
     case Node::Kind::RetroactiveConformance:
     case Node::Kind::Setter:
@@ -427,10 +430,12 @@ private:
     case Node::Kind::TypeMetadataCompletionFunction:
     case Node::Kind::TypeMetadataInstantiationCache:
     case Node::Kind::TypeMetadataInstantiationFunction:
+    case Node::Kind::TypeMetadataInPlaceInitializationCache:
     case Node::Kind::TypeMetadataLazyCache:
     case Node::Kind::UncurriedFunctionType:
-    case Node::Kind::Unmanaged:
-    case Node::Kind::Unowned:
+#define REF_STORAGE(Name, ...) \
+    case Node::Kind::Name:
+#include "swift/AST/ReferenceStorage.def"
     case Node::Kind::UnsafeAddressor:
     case Node::Kind::UnsafeMutableAddressor:
     case Node::Kind::ValueWitness:
@@ -438,7 +443,6 @@ private:
     case Node::Kind::Variable:
     case Node::Kind::VTableAttribute:
     case Node::Kind::VTableThunk:
-    case Node::Kind::Weak:
     case Node::Kind::WillSet:
     case Node::Kind::ReflectionMetadataBuiltinDescriptor:
     case Node::Kind::ReflectionMetadataFieldDescriptor:
@@ -1130,18 +1134,12 @@ NodePointer NodePrinter::print(NodePointer Node, bool asPrefixContext) {
     print(Node->getChild(0));
     print(Node->getChild(1));
     return nullptr;
-  case Node::Kind::Weak:
-    Printer << "weak ";
-    print(Node->getChild(0));
+#define REF_STORAGE(Name, ...) \
+  case Node::Kind::Name: \
+    Printer << keywordOf(ReferenceOwnership::Name) << " "; \
+    print(Node->getChild(0)); \
     return nullptr;
-  case Node::Kind::Unowned:
-    Printer << "unowned ";
-    print(Node->getChild(0));
-    return nullptr;
-  case Node::Kind::Unmanaged:
-    Printer << "unowned(unsafe) ";
-    print(Node->getChild(0));
-    return nullptr;
+#include "swift/AST/ReferenceStorage.def"
   case Node::Kind::InOut:
     Printer << "inout ";
     print(Node->getChild(0));
@@ -1185,6 +1183,9 @@ NodePointer NodePrinter::print(NodePointer Node, bool asPrefixContext) {
     return nullptr;
   case Node::Kind::GenericSpecializationNotReAbstracted:
     printSpecializationPrefix(Node, "generic not re-abstracted specialization");
+    return nullptr;
+  case Node::Kind::InlinedGenericFunction:
+    printSpecializationPrefix(Node, "inlined generic function");
     return nullptr;
   case Node::Kind::SpecializationIsFragile:
     Printer << "preserving fragile attribute";
@@ -1493,10 +1494,6 @@ NodePointer NodePrinter::print(NodePointer Node, bool asPrefixContext) {
     Printer << "protocol descriptor for ";
     print(Node->getChild(0));
     return nullptr;
-  case Node::Kind::ProtocolRequirementArray:
-    Printer << "protocol requirement array for ";
-    print(Node->getChild(0));
-    return nullptr;
   case Node::Kind::FullTypeMetadata:
     Printer << "full type metadata for ";
     print(Node->getChild(0));
@@ -1515,6 +1512,10 @@ NodePointer NodePrinter::print(NodePointer Node, bool asPrefixContext) {
     return nullptr;
   case Node::Kind::TypeMetadataInstantiationFunction:
     Printer << "type metadata instantiation function for ";
+    print(Node->getChild(0));
+    return nullptr;
+  case Node::Kind::TypeMetadataInPlaceInitializationCache:
+    Printer << "type metadata in-place initialization cache for ";
     print(Node->getChild(0));
     return nullptr;
   case Node::Kind::TypeMetadataCompletionFunction:
@@ -1720,6 +1721,12 @@ NodePointer NodePrinter::print(NodePointer Node, bool asPrefixContext) {
   case Node::Kind::DidSet:
     return printAbstractStorage(Node->getFirstChild(), asPrefixContext,
                                 "didset");
+  case Node::Kind::ReadAccessor:
+    return printAbstractStorage(Node->getFirstChild(), asPrefixContext,
+                                "read");
+  case Node::Kind::ModifyAccessor:
+    return printAbstractStorage(Node->getFirstChild(), asPrefixContext,
+                                "modify");
   case Node::Kind::Allocator:
     return printEntity(Node, asPrefixContext, TypePrinting::FunctionStyle,
                        /*hasName*/false, isClassType(Node->getChild(0)) ?

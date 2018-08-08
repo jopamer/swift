@@ -30,6 +30,7 @@ add_swift_tool_subdirectory(swift-llvm-opt)
 add_swift_tool_subdirectory(swift-api-digester)
 add_swift_tool_subdirectory(swift-syntax-test)
 add_swift_tool_subdirectory(swift-refactor)
+add_subdirectory(swift-test-utils)
 
 if(LLVM_USE_SANITIZE_COVERAGE)
 add_swift_tool_subdirectory(swift-demangle-fuzzer)
@@ -54,6 +55,7 @@ if(SWIFT_HOST_VARIANT STREQUAL "macosx")
   # Ensure we only build SwiftSyntax when we're building both.
   if(BUILD_FOUNDATION)
     add_subdirectory(SwiftSyntax)
+    add_swift_tool_subdirectory(swift-swiftsyntax-test)
   endif()
 endif()
 

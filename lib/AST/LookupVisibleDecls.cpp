@@ -130,7 +130,6 @@ static bool isDeclVisibleInLookupMode(ValueDecl *Member, LookupState LS,
 
   if (TypeResolver) {
     TypeResolver->resolveDeclSignature(Member);
-    TypeResolver->resolveAccessControl(Member);
   }
 
   // Check access when relevant.
@@ -216,7 +215,7 @@ static void doGlobalExtensionLookup(Type BaseType,
   }
 
   // Handle shadowing.
-  removeShadowedDecls(FoundDecls, CurrDC->getParentModule(), TypeResolver);
+  removeShadowedDecls(FoundDecls, CurrDC->getParentModule());
 }
 
 /// \brief Enumerate immediate members of the type \c LookupType and its
@@ -341,17 +340,14 @@ static void doDynamicLookup(VisibleDeclConsumer &Consumer,
       case DeclKind::Accessor:
       case DeclKind::Func: {
         auto FD = cast<FuncDecl>(D);
-        assert(FD->getImplicitSelfDecl() && "should not find free functions");
+        assert(FD->hasImplicitSelfDecl() && "should not find free functions");
         (void)FD;
 
         if (FD->isInvalid())
           break;
 
         // Get the type without the first uncurry level with 'self'.
-        CanType T = D->getInterfaceType()
-                        ->castTo<AnyFunctionType>()
-                        ->getResult()
-                        ->getCanonicalType();
+        CanType T = FD->getMethodInterfaceType()->getCanonicalType();
 
         auto Signature = std::make_pair(D->getBaseName(), T);
         if (!FunctionsReported.insert(Signature).second)
@@ -615,8 +611,7 @@ static void lookupVisibleMemberDeclsImpl(
   // Lookup module references, as on some_module.some_member.  These are
   // special and can't have extensions.
   if (ModuleType *MT = BaseTy->getAs<ModuleType>()) {
-    AccessFilteringDeclConsumer FilteringConsumer(CurrDC, Consumer,
-                                                  TypeResolver);
+    AccessFilteringDeclConsumer FilteringConsumer(CurrDC, Consumer);
     MT->getModule()->lookupVisibleDecls(ModuleDecl::AccessPathTy(),
                                         FilteringConsumer,
                                         NLKind::QualifiedLookup);
@@ -700,7 +695,11 @@ static void lookupVisibleMemberDeclsImpl(
     // If we have a class type, look into its superclass.
     auto *CurClass = dyn_cast<ClassDecl>(CurNominal);
 
-    if (CurClass && CurClass->hasSuperclass()) {
+    // FIXME: We check `getSuperclass()` here because we'll be using the
+    // superclass Type below, and in ill-formed code `hasSuperclass()` could
+    // be true while `getSuperclass()` returns null, because the latter
+    // looks for a declaration.
+    if (CurClass && CurClass->getSuperclass()) {
       // FIXME: This path is no substitute for an actual circularity check.
       // The real fix is to check that the superclass doesn't introduce a
       // circular reference before it's written into the AST.
@@ -816,7 +815,6 @@ public:
 
     if (TypeResolver) {
       TypeResolver->resolveDeclSignature(VD);
-      TypeResolver->resolveAccessControl(VD);
     }
 
     if (VD->isInvalid()) {
@@ -849,10 +847,6 @@ public:
     }
 
     // Does it make sense to substitute types?
-
-    // Don't pass UnboundGenericType here. If you see this assertion
-    // being hit, fix the caller, don't remove it.
-    assert(IsTypeLookup || !BaseTy->hasUnboundGenericType());
 
     // If the base type is AnyObject, we might be doing a dynamic
     // lookup, so the base type won't match the type of the member's
@@ -997,14 +991,13 @@ void swift::lookupVisibleDecls(VisibleDeclConsumer &Consumer,
         namelookup::FindLocalVal(SM, Loc, Consumer).visit(AFD->getBody());
       }
 
-      for (auto *P : AFD->getParameterLists())
-        namelookup::FindLocalVal(SM, Loc, Consumer).checkParameterList(P);
+      if (auto *P = AFD->getImplicitSelfDecl()) {
+        namelookup::FindLocalVal(SM, Loc, Consumer).checkValueDecl(
+          const_cast<ParamDecl *>(P), DeclVisibilityKind::FunctionParameter);
+      }
 
-      // Constructors and destructors don't have 'self' in parameter patterns.
-      if (isa<ConstructorDecl>(AFD) || isa<DestructorDecl>(AFD))
-        if (auto *selfParam = AFD->getImplicitSelfDecl())
-          Consumer.foundDecl(const_cast<ParamDecl*>(selfParam),
-                             DeclVisibilityKind::FunctionParameter);
+      namelookup::FindLocalVal(SM, Loc, Consumer).checkParameterList(
+        AFD->getParameters());
 
       if (AFD->getDeclContext()->isTypeContext()) {
         ExtendedType = AFD->getDeclContext()->getSelfTypeInContext();

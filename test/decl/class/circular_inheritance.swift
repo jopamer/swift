@@ -6,7 +6,7 @@
 // RUN: %FileCheck -check-prefix CHECK-DOT %s  < %t.dot
 
 // Check that we produced superclass type requests.
-// RUN: %{python} %utils/process-stats-dir.py --evaluate 'SuperclassTypeRequest == 16' %t/stats-dir
+// RUN: %{python} %utils/process-stats-dir.py --evaluate 'SuperclassTypeRequest == 17' %t/stats-dir
 
 class Left
     : Right.Hand {
@@ -47,11 +47,27 @@ class Outer3
 }
 
 // CHECK: ===CYCLE DETECTED===
-// CHECK-NEXT: `--{{.*}}SuperclassTypeRequest({{.*Left}}
-// CHECK-NEXT:      `--{{.*}}InheritedTypeRequest(circular_inheritance.(file).Left@
-// CHECK-NEXT:          `--{{.*}}SuperclassTypeRequest
-// CHECK-NEXT:              `--{{.*}}InheritedTypeRequest(circular_inheritance.(file).Right@
-// CHECK-NEXT:                  `--{{.*}}SuperclassTypeRequest{{.*(cyclic dependency)}}
+// CHECK-NEXT: `--{{.*}}SuperclassDeclRequest({{.*Left}}
+// CHECK:      `--{{.*}}InheritedDeclsReferencedRequest(circular_inheritance.(file).Left@
+// CHECK:          `--{{.*}}SuperclassDeclRequest
+// CHECK:              `--{{.*}}InheritedDeclsReferencedRequest(circular_inheritance.(file).Right@
+// CHECK:                  `--{{.*}}SuperclassDeclRequest{{.*(cyclic dependency)}}
 
 // CHECK-DOT: digraph Dependencies
 // CHECK-DOT: label="InheritedTypeRequest
+
+protocol Initable {
+  init()
+  // expected-note@-1 {{protocol requires initializer 'init()' with type '()'; do you want to add a stub?}}
+}
+
+protocol Shape : Circle {}
+
+class Circle : Initable & Circle {}
+// expected-error@-1 {{'Circle' inherits from itself}}
+// expected-error@-2 {{type 'Circle' does not conform to protocol 'Initable'}}
+
+func crash() {
+  Circle()
+  // expected-error@-1 {{'Circle' cannot be constructed because it has no accessible initializers}}
+}

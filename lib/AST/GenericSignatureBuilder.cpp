@@ -2167,17 +2167,19 @@ TypeDecl *EquivalenceClass::lookupNestedType(
     }
   }
 
-  // If we haven't found anything yet but have a superclass, look for a type
-  // in the superclass.
-  // FIXME: Shouldn't we always look in the superclass?
-  if (!bestAssocType && concreteDecls.empty() && superclass) {
-    if (auto classDecl = superclass->getClassOrBoundGenericClass()) {
-      SmallVector<ValueDecl *, 2> superclassMembers;
-      classDecl->getParentModule()->lookupQualified(
-          superclass, name,
+  // If we haven't found anything yet but have a concrete type or a superclass,
+  // look for a type in that.
+  // FIXME: Shouldn't we always look here?
+  if (!bestAssocType && concreteDecls.empty()) {
+    Type typeToSearch = concreteType ? concreteType : superclass;
+    auto *decl = typeToSearch ? typeToSearch->getAnyNominal() : nullptr;
+    if (decl) {
+      SmallVector<ValueDecl *, 2> foundMembers;
+      decl->getParentModule()->lookupQualified(
+          typeToSearch, name,
           NL_QualifiedDefault | NL_OnlyTypes | NL_ProtocolMembers, nullptr,
-          superclassMembers);
-      for (auto member : superclassMembers) {
+          foundMembers);
+      for (auto member : foundMembers) {
         if (auto type = dyn_cast<TypeDecl>(member)) {
           // Resolve the signature of this type.
           if (!type->hasInterfaceType()) {
@@ -3014,6 +3016,11 @@ void ArchetypeType::resolveNestedType(
     builder.resolveEquivalenceClass(
                                   memberInterfaceType,
                                   ArchetypeResolutionKind::CompleteWellFormed);
+  if (!equivClass) {
+    nested.second = ErrorType::get(interfaceType);
+    return;
+  }
+
   auto result = equivClass->getTypeInContext(builder, genericEnv);
   assert(!nested.second ||
          nested.second->isEqual(result) ||
@@ -3938,11 +3945,13 @@ static Type substituteConcreteType(GenericSignatureBuilder &builder,
     type = type.subst(subMap, SubstFlags::UseErrorType);
   } else {
     // Substitute in the superclass type.
-    parentType = basePA->getEquivalenceClassIfPresent()->superclass;
-    auto superclassDecl = parentType->getClassOrBoundGenericClass();
+    auto parentPA = basePA->getEquivalenceClassIfPresent();
+    parentType =
+        parentPA->concreteType ? parentPA->concreteType : parentPA->superclass;
+    auto parentDecl = parentType->getAnyNominal();
 
-    subMap = parentType->getMemberSubstitutionMap(
-                           superclassDecl->getParentModule(), concreteDecl);
+    subMap = parentType->getMemberSubstitutionMap(parentDecl->getParentModule(),
+                                                  concreteDecl);
     type = type.subst(subMap, SubstFlags::UseErrorType);
   }
 
@@ -4081,7 +4090,7 @@ auto GenericSignatureBuilder::resolve(UnresolvedType paOrT,
     return ResolvedType(pa);
 
   // Determine what kind of resolution we want.
-    Type type = paOrT.dyn_cast<Type>();
+  Type type = paOrT.dyn_cast<Type>();
   ArchetypeResolutionKind resolutionKind =
     ArchetypeResolutionKind::WellFormed;
   if (!source.isExplicit() && source.isRecursive(type, *this))
@@ -5087,7 +5096,7 @@ ConstraintResult GenericSignatureBuilder::addSameTypeRequirementToConcrete(
                                            ResolvedType type,
                                            Type concrete,
                                            const RequirementSource *source) {
-auto equivClass = type.getEquivalenceClass(*this);
+  auto equivClass = type.getEquivalenceClass(*this);
 
   // Record the concrete type and its source.
   equivClass->concreteTypeConstraints.push_back(
@@ -6472,7 +6481,7 @@ static void computeDerivedSameTypeComponents(
 
   // If there is a concrete type, figure out the best concrete type anchor
   // per component.
-auto genericParams = builder.getGenericParams();
+  auto genericParams = builder.getGenericParams();
   for (const auto &concrete : equivClass->concreteTypeConstraints) {
     // Dig out the component associated with constraint.
     Type subjectType = concrete.getSubjectDependentType(genericParams);
@@ -7058,7 +7067,7 @@ void GenericSignatureBuilder::checkSuperclassConstraints(
                               EquivalenceClass *equivClass) {
   assert(equivClass->superclass && "No superclass constraint?");
 
-  // Resolve any this-far-unresolved dependent types.
+  // Resolve any thus-far-unresolved dependent types.
   Type resolvedSuperclass =
     resolveDependentMemberTypes(*this, equivClass->superclass);
 
@@ -7071,13 +7080,13 @@ void GenericSignatureBuilder::checkSuperclassConstraints(
 
         Type resolvedType =
           resolveDependentMemberTypes(*this, constraint.value);
-        return resolvedType->isEqual(equivClass->superclass);
+        return resolvedType->isEqual(resolvedSuperclass);
       },
       [&](const Constraint<Type> &constraint) {
         Type superclass = constraint.value;
 
         // If this class is a superclass of the "best"
-        if (superclass->isExactSuperclassOf(equivClass->superclass))
+        if (superclass->isExactSuperclassOf(resolvedSuperclass))
           return ConstraintRelation::Redundant;
 
         // Otherwise, it conflicts.
@@ -7087,7 +7096,7 @@ void GenericSignatureBuilder::checkSuperclassConstraints(
       diag::redundant_superclass_constraint,
       diag::superclass_redundancy_here);
 
-  // Resolve any this-far-unresolved dependent types.
+  // Record the resolved superclass type.
   equivClass->superclass = resolvedSuperclass;
 
   // If we have a concrete type, check it.

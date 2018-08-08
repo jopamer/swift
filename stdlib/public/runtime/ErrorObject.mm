@@ -385,7 +385,6 @@ NSDictionary *_swift_stdlib_getErrorDefaultUserInfo(OpaqueValue *error,
   //   -> AnyObject?
   auto foundationGetDefaultUserInfo = getErrorBridgingInfo().GetErrorDefaultUserInfo;
   if (!foundationGetDefaultUserInfo) {
-    SWIFT_CC_PLUSONE_GUARD(T->vw_destroy(error));
     return nullptr;
   }
 
@@ -477,7 +476,8 @@ swift::tryDynamicCastNSErrorObjectToValue(HeapObject *object,
   // A _SwiftNativeNSError box can always be unwrapped to cast the value back
   // out as an Error existential.
   if (!reinterpret_cast<SwiftError*>(srcInstance)->isPureNSError()) {
-    auto theErrorProtocol = &PROTOCOL_DESCR_SYM(s5Error);
+    ProtocolDescriptorRef theErrorProtocol(&PROTOCOL_DESCR_SYM(s5Error),
+                                           ProtocolDispatchStrategy::Swift);
     auto theErrorTy =
       swift_getExistentialTypeMetadata(ProtocolClassConstraint::Any,
                                        nullptr, 1, &theErrorProtocol);

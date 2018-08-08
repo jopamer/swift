@@ -39,6 +39,10 @@ AccessedStorage::Kind AccessedStorage::classify(SILValue base) {
   }
   case ValueKind::RefElementAddrInst:
     return Class;
+  // A yield is effectively a nested access, enforced independently in
+  // the caller and callee.
+  case ValueKind::BeginApplyResult:
+    return Yield;
   // A function argument is effectively a nested access, enforced
   // independently in the caller and callee.
   case ValueKind::SILFunctionArgument:
@@ -67,6 +71,10 @@ AccessedStorage::AccessedStorage(SILValue base, Kind kind) {
     break;
   case Nested:
     assert(isa<BeginAccessInst>(base));
+    value = base;
+    break;
+  case Yield:
+    assert(isa<BeginApplyResult>(base));
     value = base;
     break;
   case Unidentified:
@@ -119,6 +127,9 @@ const ValueDecl *AccessedStorage::getDecl(SILFunction *F) const {
   case Argument:
     return getArgument(F)->getDecl();
 
+  case Yield:
+    return nullptr;
+
   case Nested:
     return nullptr;
 
@@ -139,6 +150,8 @@ const char *AccessedStorage::getKindName(AccessedStorage::Kind k) {
     return "Unidentified";
   case Argument:
     return "Argument";
+  case Yield:
+    return "Yield";
   case Global:
     return "Global";
   case Class:
@@ -152,6 +165,7 @@ void AccessedStorage::print(raw_ostream &os) const {
   case Box:
   case Stack:
   case Nested:
+  case Yield:
   case Unidentified:
     os << value;
     break;
@@ -179,6 +193,16 @@ static bool isExternalGlobalAddressor(ApplyInst *AI) {
     return false;
   
   return funcRef->isGlobalInit() && funcRef->isExternalDeclaration();
+}
+
+// Return true if the given StructExtractInst extracts the RawPointer from
+// Unsafe[Mutable]Pointer.
+static bool isUnsafePointerExtraction(StructExtractInst *SEI) {
+  assert(isa<BuiltinRawPointerType>(SEI->getType().getASTType()));
+  auto &C = SEI->getModule().getASTContext();
+  auto *decl = SEI->getStructDecl();
+  return decl == C.getUnsafeMutablePointerDecl()
+    || decl == C.getUnsafePointerDecl();
 }
 
 // Given an address base is a block argument, verify that it is actually a box
@@ -231,6 +255,12 @@ AccessedStorage swift::findAccessedStorage(SILValue sourceAddr) {
     if (kind != AccessedStorage::Unidentified)
       return AccessedStorage(address, kind);
 
+    // If the address producer cannot immediately be classified, follow the
+    // use-def chain of address, box, or RawPointer producers.
+    assert(address->getType().isAddress()
+           || isa<SILBoxType>(address->getType().getASTType())
+           || isa<BuiltinRawPointerType>(address->getType().getASTType()));
+
     // Handle other unidentified address sources.
     switch (address->getKind()) {
     default:
@@ -246,6 +276,14 @@ AccessedStorage swift::findAccessedStorage(SILValue sourceAddr) {
         return AccessedStorage(address, AccessedStorage::Unidentified);
 
       // Don't currently allow any other calls to return an accessed address.
+      return AccessedStorage();
+
+    case ValueKind::StructExtractInst:
+      // Handle nested access to a KeyPath projection. The projection itself
+      // uses a Builtin. However, the returned UnsafeMutablePointer may be
+      // converted to an address and accessed via an inout argument.
+      if (isUnsafePointerExtraction(cast<StructExtractInst>(address)))
+        return AccessedStorage(address, AccessedStorage::Unidentified);
       return AccessedStorage();
 
     // A block argument may be a box value projected out of
@@ -276,6 +314,12 @@ AccessedStorage swift::findAccessedStorage(SILValue sourceAddr) {
       return AccessedStorage();
     }
 
+    // ref_tail_addr project an address from a reference.
+    // This is a valid address producer for nested @inout argument
+    // access, but it is never used for formal access of identified objects.
+    case ValueKind::RefTailAddrInst:
+      return AccessedStorage(address, AccessedStorage::Unidentified);
+
     // Inductive cases:
     // Look through address casts to find the source address.
     case ValueKind::MarkUninitializedInst:
@@ -297,8 +341,8 @@ AccessedStorage swift::findAccessedStorage(SILValue sourceAddr) {
       continue;
 
     // Access to a Builtin.RawPointer. Treat this like the inductive cases
-    // above because some RawPointer's originate from identified locations. See
-    // the special case for global addressors, which return RawPointer above.
+    // above because some RawPointers originate from identified locations. See
+    // the special case for global addressors, which return RawPointer, above.
     //
     // If the inductive search does not find a valid addressor, it will
     // eventually reach the default case that returns in invalid location. This
@@ -320,11 +364,10 @@ AccessedStorage swift::findAccessedStorage(SILValue sourceAddr) {
       address = cast<SingleValueInstruction>(address)->getOperand(0);
       continue;
 
-    // Subobject projections.
+    // Address-to-address subobject projections.
     case ValueKind::StructElementAddrInst:
     case ValueKind::TupleElementAddrInst:
     case ValueKind::UncheckedTakeEnumDataAddrInst:
-    case ValueKind::RefTailAddrInst:
     case ValueKind::TailAddrInst:
     case ValueKind::IndexAddrInst:
       address = cast<SingleValueInstruction>(address)->getOperand(0);
@@ -383,11 +426,13 @@ bool swift::memInstMustInitialize(Operand *memOper) {
     return cast<StoreInst>(memInst)->getOwnershipQualifier()
            == StoreOwnershipQualifier::Init;
 
-  case SILInstructionKind::StoreWeakInst:
-    return cast<StoreWeakInst>(memInst)->isInitializationOfDest();
-
-  case SILInstructionKind::StoreUnownedInst:
-    return cast<StoreUnownedInst>(memInst)->isInitializationOfDest();
+#define NEVER_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Store##Name##Inst: \
+    return cast<Store##Name##Inst>(memInst)->isInitializationOfDest();
+#define SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Store##Name##Inst: \
+    return cast<Store##Name##Inst>(memInst)->isInitializationOfDest();
+#include "swift/AST/ReferenceStorage.def"
   }
 }
 
@@ -403,6 +448,9 @@ bool swift::isPossibleFormalAccessBase(const AccessedStorage &storage,
     break;
   case AccessedStorage::Class:
     break;
+  case AccessedStorage::Yield:
+    // Yields are accessed by the caller.
+    return false;
   case AccessedStorage::Argument:
     // Function arguments are accessed by the caller.
     return false;
@@ -464,12 +512,11 @@ static void visitApplyAccesses(ApplySite apply,
 
     // When @noescape function closures are passed as arguments, their
     // arguments are considered accessed at the call site.
-    FindClosureResult result = findClosureForAppliedArg(oper.get());
-    if (!result.PAI)
-      continue;
-
+    TinyPtrVector<PartialApplyInst *> partialApplies;
+    findClosuresForFunctionValue(oper.get(), partialApplies);
     // Recursively visit @noescape function closure arguments.
-    visitApplyAccesses(result.PAI, visitor);
+    for (auto *PAI : partialApplies)
+      visitApplyAccesses(PAI, visitor);
   }
 }
 
@@ -588,10 +635,13 @@ void swift::visitAccessedAddress(SILInstruction *I,
     visitor(&I->getAllOperands()[CopyAddrInst::Dest]);
     return;
 
+#define NEVER_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Store##Name##Inst:
+#define SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Store##Name##Inst:
+#include "swift/AST/ReferenceStorage.def"
   case SILInstructionKind::StoreInst:
   case SILInstructionKind::StoreBorrowInst:
-  case SILInstructionKind::StoreUnownedInst:
-  case SILInstructionKind::StoreWeakInst:
     visitor(&I->getAllOperands()[StoreInst::Dest]);
     return;
 
@@ -599,12 +649,15 @@ void swift::visitAccessedAddress(SILInstruction *I,
     visitor(&I->getAllOperands()[0]);
     return;
 
+#define NEVER_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Load##Name##Inst:
+#define SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Load##Name##Inst:
+#include "swift/AST/ReferenceStorage.def"
   case SILInstructionKind::InitExistentialAddrInst:
   case SILInstructionKind::InjectEnumAddrInst:
   case SILInstructionKind::LoadInst:
   case SILInstructionKind::LoadBorrowInst:
-  case SILInstructionKind::LoadWeakInst:
-  case SILInstructionKind::LoadUnownedInst:
   case SILInstructionKind::OpenExistentialAddrInst:
   case SILInstructionKind::SwitchEnumAddrInst:
   case SILInstructionKind::UncheckedTakeEnumDataAddrInst:
@@ -620,6 +673,9 @@ void swift::visitAccessedAddress(SILInstruction *I,
   }
   // Non-access cases: these are marked with memory side effects, but, by
   // themselves, do not access formal memory.
+#define SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Copy##Name##ValueInst:
+#include "swift/AST/ReferenceStorage.def"
   case SILInstructionKind::AbortApplyInst:
   case SILInstructionKind::AllocBoxInst:
   case SILInstructionKind::AllocExistentialBoxInst:
@@ -634,7 +690,6 @@ void swift::visitAccessedAddress(SILInstruction *I,
   case SILInstructionKind::CopyBlockInst:
   case SILInstructionKind::CopyBlockWithoutEscapingInst:
   case SILInstructionKind::CopyValueInst:
-  case SILInstructionKind::CopyUnownedValueInst:
   case SILInstructionKind::DeinitExistentialAddrInst:
   case SILInstructionKind::DeinitExistentialValueInst:
   case SILInstructionKind::DestroyAddrInst:
@@ -664,8 +719,6 @@ void swift::visitAccessedAddress(SILInstruction *I,
   case SILInstructionKind::UncheckedRefCastAddrInst:
   case SILInstructionKind::UnconditionalCheckedCastAddrInst:
   case SILInstructionKind::UnconditionalCheckedCastValueInst:
-  case SILInstructionKind::UnownedReleaseInst:
-  case SILInstructionKind::UnownedRetainInst:
   case SILInstructionKind::ValueMetatypeInst:
     return;
   }

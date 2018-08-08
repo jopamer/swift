@@ -119,45 +119,49 @@ set(SWIFTLIB_ESSENTIAL
   Shims.swift
   Slice.swift
   SmallString.swift
-  Sort.swift.gyb
+  Sort.swift
   StaticString.swift
-  Stride.swift.gyb
+  Stride.swift
   StringHashable.swift  # ORDER DEPENDENCY: Must precede String.swift
   String.swift
   StringBridge.swift
+  StringCharacterView.swift
   StringComparable.swift
   StringComparison.swift
+  StringCreate.swift
   StringGuts.swift
   StringGutsVisitor.swift
   StringObject.swift
   StringProtocol.swift
   StringIndex.swift
+  StringIndexConversions.swift
   StringInterpolation.swift
   StringLegacy.swift
+  StringNormalization.swift
   StringRangeReplaceableCollection.swift
   StringStorage.swift
   StringSwitch.swift
-  StringIndexConversions.swift
-  StringNormalization.swift
+  StringTesting.swift
   StringUnicodeScalarView.swift
-  StringUTF16.swift
-  StringUTF8.swift
+  StringUTF16View.swift
+  StringUTF8View.swift
   StringVariant.swift
-  Substring.swift.gyb
+  Substring.swift
   SwiftNativeNSArray.swift
   ThreadLocalStorage.swift
   UIntBuffer.swift
   UnavailableStringAPIs.swift.gyb
   UnicodeEncoding.swift
   UnicodeParser.swift
+  UnicodeScalarProperties.swift
   Unmanaged.swift
   UnmanagedOpaqueString.swift
   UnmanagedString.swift
   UnsafeBitMap.swift
   UnsafeBufferPointer.swift.gyb
   UnsafeRawBufferPointer.swift.gyb
-  UnsafePointer.swift.gyb
-  UnsafeRawPointer.swift.gyb
+  UnsafePointer.swift
+  UnsafeRawPointer.swift
   UTFEncoding.swift
   UTF8.swift
   UTF16.swift

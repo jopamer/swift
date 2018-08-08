@@ -96,7 +96,7 @@ extension ClosedRange {
 }
 
 extension ClosedRange: RangeExpression {
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable // trivial-implementation
   public func relative<C: Collection>(to collection: C) -> Range<Bound>
   where C.Index == Bound {
     return Range(
@@ -158,7 +158,7 @@ extension ClosedRange.Index : Comparable {
     switch (lhs, rhs) {
     case (.inRange(let l), .inRange(let r)):
       return l < r
-    case (.inRange(_), .pastEnd):
+    case (.inRange, .pastEnd):
       return true
     default:
       return false
@@ -232,24 +232,24 @@ where Bound : Strideable, Bound.Stride : SignedInteger
   }
 
   @inlinable
-  public func index(_ i: Index, offsetBy n: Int) -> Index {
+  public func index(_ i: Index, offsetBy distance: Int) -> Index {
     switch i {
     case .inRange(let x):
       let d = x.distance(to: upperBound)
-      if n <= d {
-        let newPosition = x.advanced(by: numericCast(n))
+      if distance <= d {
+        let newPosition = x.advanced(by: numericCast(distance))
         _precondition(newPosition >= lowerBound,
           "Advancing past start index")
         return .inRange(newPosition)
       }
-      if d - -1 == n { return .pastEnd }
+      if d - -1 == distance { return .pastEnd }
       _preconditionFailure("Advancing past end index")
     case .pastEnd:
-      if n == 0 {
+      if distance == 0 {
         return i
       } 
-      if n < 0 {
-        return index(.inRange(upperBound), offsetBy: numericCast(n + 1))
+      if distance < 0 {
+        return index(.inRange(upperBound), offsetBy: numericCast(distance + 1))
       }
       _preconditionFailure("Advancing past end index")
     }
@@ -330,7 +330,6 @@ extension Comparable {
   /// - Parameters:
   ///   - minimum: The lower bound for the range.
   ///   - maximum: The upper bound for the range.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public static func ... (minimum: Self, maximum: Self) -> ClosedRange<Self> {
     _precondition(
@@ -362,7 +361,6 @@ extension Strideable where Stride: SignedInteger {
   /// - Parameters:)`.
   ///   - minimum: The lower bound for the range.
   ///   - maximum: The upper bound for the range.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public static func ... (minimum: Self, maximum: Self) -> ClosedRange<Self> {
     // FIXME: swift-3-indexing-model: tests for traps.
@@ -377,7 +375,7 @@ extension ClosedRange: Equatable {
   ///
   /// Two ranges are equal when they have the same lower and upper bounds.
   ///
-  ///     let x: ClosedRange = 5...15
+  ///     let x = 5...15
   ///     print(x == 5...15)
   ///     // Prints "true"
   ///     print(x == 10...20)
@@ -404,7 +402,7 @@ extension ClosedRange: Hashable where Bound: Hashable {
 
 extension ClosedRange : CustomStringConvertible {
   /// A textual representation of the range.
-  @inlinable // FIXME(sil-serialize-all)...
+  @inlinable // trivial-implementation...
   public var description: String {
     return "\(lowerBound)...\(upperBound)"
   }
@@ -444,7 +442,7 @@ extension ClosedRange {
   ///
   /// - Parameter limits: The range to clamp the bounds of this range.
   /// - Returns: A new range clamped to the bounds of `limits`.
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable // trivial-implementation
   @inline(__always)
   public func clamped(to limits: ClosedRange) -> ClosedRange {
     let lower =         

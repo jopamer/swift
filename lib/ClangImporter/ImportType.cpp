@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2018 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -223,10 +223,35 @@ namespace {
         return Type();
 
       // FIXME: Types that can be mapped, but aren't yet.
+      case clang::BuiltinType::ShortAccum:
+      case clang::BuiltinType::Accum:
+      case clang::BuiltinType::LongAccum:
+      case clang::BuiltinType::UShortAccum:
+      case clang::BuiltinType::UAccum:
+      case clang::BuiltinType::ULongAccum:
+      case clang::BuiltinType::ShortFract:
+      case clang::BuiltinType::Fract:
+      case clang::BuiltinType::LongFract:
+      case clang::BuiltinType::UShortFract:
+      case clang::BuiltinType::UFract:
+      case clang::BuiltinType::ULongFract:
+      case clang::BuiltinType::SatShortAccum:
+      case clang::BuiltinType::SatAccum:
+      case clang::BuiltinType::SatLongAccum:
+      case clang::BuiltinType::SatUShortAccum:
+      case clang::BuiltinType::SatUAccum:
+      case clang::BuiltinType::SatULongAccum:
+      case clang::BuiltinType::SatShortFract:
+      case clang::BuiltinType::SatFract:
+      case clang::BuiltinType::SatLongFract:
+      case clang::BuiltinType::SatUShortFract:
+      case clang::BuiltinType::SatUFract:
+      case clang::BuiltinType::SatULongFract:
       case clang::BuiltinType::Half:
       case clang::BuiltinType::Float16:
       case clang::BuiltinType::Float128:
       case clang::BuiltinType::NullPtr:
+      case clang::BuiltinType::Char8:
         return Type();
 
       // Objective-C types that aren't mapped directly; rather, pointers to
@@ -407,8 +432,9 @@ namespace {
       FunctionType *fTy = pointeeType->castTo<FunctionType>();
       
       auto rep = FunctionType::Representation::Block;
-      auto funcTy = FunctionType::get(fTy->getInput(), fTy->getResult(),
-                                   fTy->getExtInfo().withRepresentation(rep));
+      auto funcTy =
+          FunctionType::get(fTy->getParams(), fTy->getResult(),
+                            fTy->getExtInfo().withRepresentation(rep));
       return { funcTy, ImportHint::Block };
     }
 
@@ -884,10 +910,7 @@ namespace {
               }
               importedTypeArg = subresult.AbstractType;
             } else if (typeParam->getSuperclass() &&
-                       (Impl.SwiftContext.isSwiftVersion3() ||
-                        typeParam->getConformingProtocols().empty())) {
-              // In Swift 3 mode, discard the protocol bounds if there is
-              // a superclass bound.
+                       typeParam->getConformingProtocols().empty()) {
               importedTypeArg = typeParam->getSuperclass();
             } else {
               SmallVector<Type, 4> memberTypes;
@@ -1039,10 +1062,7 @@ namespace {
         }
       }
 
-      // Swift 3 compatibility -- don't import subclass existentials
-      if (!type->qual_empty() &&
-          (importedType->isAnyObject() ||
-           !Impl.SwiftContext.isSwiftVersion3())) {
+      if (!type->qual_empty()) {
         SmallVector<Type, 4> members;
         if (!importedType->isAnyObject())
           members.push_back(importedType);
@@ -1543,7 +1563,7 @@ static Type applyNoEscape(Type type) {
 
   // Apply @noescape to function types.
   if (auto funcType = type->getAs<FunctionType>()) {
-    return FunctionType::get(funcType->getInput(), funcType->getResult(),
+    return FunctionType::get(funcType->getParams(), funcType->getResult(),
                              funcType->getExtInfo().withNoEscape());
   }
 
@@ -1555,23 +1575,7 @@ ImportedType ClangImporter::Implementation::importFunctionReturnType(
     bool allowNSUIntegerAsInt) {
 
   // Hardcode handling of certain result types for builtins.
-  auto builtinID = clangDecl->getBuiltinID();
-  switch (builtinID) {
-  case clang::Builtin::NotBuiltin:
-    break;
-  case clang::Builtin::BIstrxfrm:
-  case clang::Builtin::BIstrcspn:
-  case clang::Builtin::BIstrspn:
-  case clang::Builtin::BIstrlen:
-  case clang::Builtin::BIstrlcpy:
-  case clang::Builtin::BIstrlcat:
-    // This is a list of all built-ins with a result type of 'size_t' that
-    // existed in Swift 3. We didn't have special handling for builtins at
-    // that time, and so these had a result type of UInt.
-    if (SwiftContext.isSwiftVersion3())
-      break;
-    LLVM_FALLTHROUGH;
-  default:
+  if (auto builtinID = clangDecl->getBuiltinID()) {
     switch (getClangASTContext().BuiltinInfo.getTypeString(builtinID)[0]) {
     case 'z': // size_t
     case 'Y': // ptrdiff_t

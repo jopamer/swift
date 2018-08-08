@@ -18,6 +18,7 @@
 
 #include "swift/Demangling/Demangler.h"
 #include "swift/Demangling/Punycode.h"
+#include "swift/AST/Ownership.h"
 #include "swift/Strings.h"
 #include <vector>
 #include <cstdio>
@@ -533,8 +534,20 @@ void Remangler::mangleGenericSpecialization(Node *node) {
   // Start another mangled name.
   Out << "__T";
 }
+
 void Remangler::mangleGenericSpecializationNotReAbstracted(Node *node) {
   Out << "TSr";
+  mangleChildNodes(node); // GenericSpecializationParams
+
+  // Specializations are just prepended to already-mangled names.
+  resetSubstitutions();
+
+  // Start another mangled name.
+  Out << "__T";
+}
+
+void Remangler::mangleInlinedGenericFunction(Node *node) {
+  Out << "TSi";
   mangleChildNodes(node); // GenericSpecializationParams
 
   // Specializations are just prepended to already-mangled names.
@@ -715,6 +728,11 @@ void Remangler::mangleTypeMetadataInstantiationFunction(Node *node) {
   mangleSingleChildNode(node); // type
 }
 
+void Remangler::mangleTypeMetadataInPlaceInitializationCache(Node *node) {
+  Out << "Ml";
+  mangleSingleChildNode(node); // type
+}
+
 void Remangler::mangleTypeMetadataCompletionFunction(Node *node) {
   Out << "Mr";
   mangleSingleChildNode(node); // type
@@ -757,10 +775,6 @@ void Remangler::mangleFullTypeMetadata(Node *node) {
 void Remangler::mangleProtocolDescriptor(Node *node) {
   Out << "Mp";
   mangleProtocolWithoutPrefix(node->begin()[0]);
-}
-
-void Remangler::mangleProtocolRequirementArray(Node *node) {
-  unreachable("todo");
 }
 
 void Remangler::mangleProtocolWitnessTablePattern(Node *node) {
@@ -1035,6 +1049,14 @@ void Remangler::mangleUnsafeAddressor(Node *node, EntityContext &ctx) {
   mangleAccessor(node->getFirstChild(), "lu", ctx);
 }
 
+void Remangler::mangleReadAccessor(Node *node, EntityContext &ctx) {
+  mangleAccessor(node->getFirstChild(), "r", ctx);
+}
+
+void Remangler::mangleModifyAccessor(Node *node, EntityContext &ctx) {
+  mangleAccessor(node->getFirstChild(), "M", ctx);
+}
+
 void Remangler::mangleExplicitClosure(Node *node, EntityContext &ctx) {
   mangleNamedAndTypedEntity(node, 'F', "U", ctx); // name is index
 }
@@ -1226,14 +1248,17 @@ void Remangler::mangleBuiltinTypeName(Node *node) {
   } else if (stripPrefix(text, "Builtin.Float")) {
     Out << 'f' << text << '_';
   } else if (stripPrefix(text, "Builtin.Vec")) {
-    auto split = text.split('x');
-    Out << 'v' << split.first << 'B';
-    if (split.second == "RawPointer") {
+    // Avoid using StringRef::split because its definition is not
+    // provided in the header so that it requires linking with libSupport.a.
+    size_t splitIdx = text.find('x');
+    Out << 'v' << text.substr(0, splitIdx) << 'B';
+    auto element = text.substr(splitIdx).substr(1);
+    if (element == "RawPointer") {
       Out << 'p';
-    } else if (stripPrefix(split.second, "Float")) {
-      Out << 'f' << split.second << '_';
-    } else if (stripPrefix(split.second, "Int")) {
-      Out << 'i' << split.second << '_';
+    } else if (stripPrefix(element, "Float")) {
+      Out << 'f' << element << '_';
+    } else if (stripPrefix(element, "Int")) {
+      Out << 'i' << element << '_';
     } else {
       unreachable("unexpected builtin vector type");
     }
@@ -1466,20 +1491,12 @@ void Remangler::mangleProtocolListWithoutPrefix(Node *node,
   Out << '_';
 }
 
-void Remangler::mangleUnowned(Node *node) {
-  Out << "Xo";
-  mangleSingleChildNode(node); // type
-}
-
-void Remangler::mangleUnmanaged(Node *node) {
-  Out << "Xu";
-  mangleSingleChildNode(node); // type
-}
-
-void Remangler::mangleWeak(Node *node) {
-  Out << "Xw";
-  mangleSingleChildNode(node); // type
-}
+#define REF_STORAGE(Name, ...) \
+  void Remangler::mangle##Name(Node *node) { \
+    Out << manglingOf(ReferenceOwnership::Name); \
+    mangleSingleChildNode(node); /* type */ \
+  }
+#include "swift/AST/ReferenceStorage.def"
 
 void Remangler::mangleShared(Node *node) {
   Out << 'h';

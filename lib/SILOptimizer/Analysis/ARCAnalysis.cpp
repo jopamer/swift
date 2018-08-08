@@ -36,14 +36,30 @@ using BasicBlockRetainValue = std::pair<SILBasicBlock *, SILValue>;
 //===----------------------------------------------------------------------===//
 
 bool swift::isRetainInstruction(SILInstruction *I) {
-  return isa<StrongRetainInst>(I) || isa<RetainValueInst>(I) ||
-         isa<UnownedRetainInst>(I);
+  switch (I->getKind()) {
+#define ALWAYS_OR_SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Name##RetainInst:
+#include "swift/AST/ReferenceStorage.def"
+  case SILInstructionKind::StrongRetainInst:
+  case SILInstructionKind::RetainValueInst:
+    return true;
+  default:
+    return false;
+  }
 }
 
 
 bool swift::isReleaseInstruction(SILInstruction *I) {
-  return isa<StrongReleaseInst>(I) || isa<ReleaseValueInst>(I) ||
-         isa<UnownedReleaseInst>(I);
+  switch (I->getKind()) {
+#define ALWAYS_OR_SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Name##ReleaseInst:
+#include "swift/AST/ReferenceStorage.def"
+  case SILInstructionKind::StrongReleaseInst:
+  case SILInstructionKind::ReleaseValueInst:
+    return true;
+  default:
+    return false;
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -1189,15 +1205,15 @@ BuiltinInst *swift::getUnsafeGuaranteedEndUser(SILValue UnsafeGuaranteedToken) {
 
   for (auto *Operand : getNonDebugUses(UnsafeGuaranteedToken)) {
     if (UnsafeGuaranteedEndI) {
-      DEBUG(llvm::dbgs() << "  multiple unsafeGuaranteedEnd users\n");
+      LLVM_DEBUG(llvm::dbgs() << "  multiple unsafeGuaranteedEnd users\n");
       UnsafeGuaranteedEndI = nullptr;
       break;
     }
     auto *BI = dyn_cast<BuiltinInst>(Operand->getUser());
     if (!BI || !BI->getBuiltinKind() ||
         *BI->getBuiltinKind() != BuiltinValueKind::UnsafeGuaranteedEnd) {
-      DEBUG(llvm::dbgs() << "  wrong unsafeGuaranteed token user "
-            << *Operand->getUser());
+      LLVM_DEBUG(llvm::dbgs() << "  wrong unsafeGuaranteed token user "
+                 << *Operand->getUser());
       break;
     }
 

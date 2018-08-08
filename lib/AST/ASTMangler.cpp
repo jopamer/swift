@@ -21,6 +21,7 @@
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/Initializer.h"
 #include "swift/AST/Module.h"
+#include "swift/AST/Ownership.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/PrettyStackTrace.h"
 #include "swift/AST/ProtocolConformance.h"
@@ -55,6 +56,10 @@ static StringRef getCodeForAccessorKind(AccessorKind kind,
     return "w";
   case AccessorKind::DidSet:
     return "W";
+  case AccessorKind::Read:
+    return "r";
+  case AccessorKind::Modify:
+    return "M";
   case AccessorKind::Address:
     // 'l' is for location. 'A' was taken.
     switch (addressorKind) {
@@ -565,20 +570,18 @@ static unsigned getUnnamedParamIndex(const ParamDecl *D) {
     llvm_unreachable("param not found");
   }
 
-  ArrayRef<ParameterList *> ParamLists;
+  ParameterList *ParamList;
 
   if (auto AFD = dyn_cast<AbstractFunctionDecl>(D->getDeclContext())) {
-    ParamLists = AFD->getParameterLists();
+    ParamList = AFD->getParameters();
   } else {
     auto ACE = cast<AbstractClosureExpr>(D->getDeclContext());
-    ParamLists = ACE->getParameterLists();
+    ParamList = ACE->getParameters();
   }
 
   unsigned UnnamedIndex = 0;
-  for (auto ParamList : ParamLists) {
-    if (getUnnamedParamIndex(ParamList, D, UnnamedIndex))
-      return UnnamedIndex;
-  }
+  if (getUnnamedParamIndex(ParamList, D, UnnamedIndex))
+    return UnnamedIndex;
 
   llvm_unreachable("param not found");
 }
@@ -803,17 +806,11 @@ void ASTMangler::appendType(Type type) {
       appendType(cast<InOutType>(tybase)->getObjectType());
       return appendOperator("z");
 
-    case TypeKind::UnmanagedStorage:
-      appendType(cast<UnmanagedStorageType>(tybase)->getReferentType());
-      return appendOperator("Xu");
-
-    case TypeKind::UnownedStorage:
-      appendType(cast<UnownedStorageType>(tybase)->getReferentType());
-      return appendOperator("Xo");
-
-    case TypeKind::WeakStorage:
-      appendType(cast<WeakStorageType>(tybase)->getReferentType());
-      return appendOperator("Xw");
+#define REF_STORAGE(Name, ...) \
+    case TypeKind::Name##Storage: \
+      appendType(cast<Name##StorageType>(tybase)->getReferentType()); \
+      return appendOperator(manglingOf(ReferenceOwnership::Name));
+#include "swift/AST/ReferenceStorage.def"
 
     case TypeKind::Tuple:
       appendTypeList(type);
@@ -1405,13 +1402,11 @@ void ASTMangler::appendContext(const DeclContext *ctx) {
 
   case DeclContextKind::ExtensionDecl: {
     auto ExtD = cast<ExtensionDecl>(ctx);
-    auto ExtTy = ExtD->getExtendedType();
+    auto decl = ExtD->getExtendedNominal();
     // Recover from erroneous extension.
-    if (ExtTy.isNull() || ExtTy->hasError())
+    if (!decl)
       return appendContext(ExtD->getDeclContext());
 
-    auto decl = ExtTy->getAnyNominal();
-    assert(decl && "extension of non-nominal type?");
     if (!ExtD->isEquivalentToExtendedContext()) {
     // Mangle the extension if:
     // - the extension is defined in a different module from the original

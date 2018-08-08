@@ -303,7 +303,7 @@ extension Range: RangeExpression {
   ///   is *not* guaranteed to be inside the bounds of `collection`. Callers
   ///   should apply the same preconditions to the return value as they would
   ///   to a range provided directly by the user.
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable // trivial-implementation
   public func relative<C: Collection>(to collection: C) -> Range<Bound>
   where C.Index == Bound {
     return Range(uncheckedBounds: (lower: lowerBound, upper: upperBound))
@@ -329,7 +329,7 @@ extension Range {
   ///
   /// - Parameter limits: The range to clamp the bounds of this range.
   /// - Returns: A new range clamped to the bounds of `limits`.
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable // trivial-implementation
   @inline(__always)
   public func clamped(to limits: Range) -> Range {
     let lower =         
@@ -346,7 +346,7 @@ extension Range {
 
 extension Range : CustomStringConvertible {
   /// A textual representation of the range.
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable // trivial-implementation
   public var description: String {
     return "\(lowerBound)..<\(upperBound)"
   }
@@ -373,11 +373,11 @@ extension Range: Equatable {
   /// Two ranges are equal when they have the same lower and upper bounds.
   /// That requirement holds even for empty ranges.
   ///
-  ///     let x: Range = 5..<15
+  ///     let x = 5..<15
   ///     print(x == 5..<15)
   ///     // Prints "true"
   ///
-  ///     let y: Range = 5..<5
+  ///     let y = 5..<5
   ///     print(y == 15..<15)
   ///     // Prints "false"
   ///
@@ -430,19 +430,17 @@ extension Range: Hashable where Bound: Hashable {
 public struct PartialRangeUpTo<Bound: Comparable> {
   public let upperBound: Bound
   
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable // trivial-implementation
   public init(_ upperBound: Bound) { self.upperBound = upperBound }
 }
 
 extension PartialRangeUpTo: RangeExpression {
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public func relative<C: Collection>(to collection: C) -> Range<Bound>
   where C.Index == Bound {
     return collection.startIndex..<self.upperBound
   }
   
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public func contains(_ element: Bound) -> Bool {
     return element < upperBound
@@ -474,18 +472,16 @@ extension PartialRangeUpTo: RangeExpression {
 public struct PartialRangeThrough<Bound: Comparable> {  
   public let upperBound: Bound
   
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable // trivial-implementation
   public init(_ upperBound: Bound) { self.upperBound = upperBound }
 }
 
 extension PartialRangeThrough: RangeExpression {
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public func relative<C: Collection>(to collection: C) -> Range<Bound>
   where C.Index == Bound {
     return collection.startIndex..<collection.index(after: self.upperBound)
   }
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public func contains(_ element: Bound) -> Bool {
     return element <= upperBound
@@ -577,19 +573,18 @@ extension PartialRangeThrough: RangeExpression {
 public struct PartialRangeFrom<Bound: Comparable> {
   public let lowerBound: Bound
 
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable // trivial-implementation
   public init(_ lowerBound: Bound) { self.lowerBound = lowerBound }
 }
 
 extension PartialRangeFrom: RangeExpression {
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public func relative<C: Collection>(
     to collection: C
   ) -> Range<Bound> where C.Index == Bound {
     return self.lowerBound..<collection.endIndex
   }
-  @inlinable // FIXME(sil-serialize-all)
+  @inlinable // trivial-implementation
   public func contains(_ element: Bound) -> Bool {
     return lowerBound <= element
   }
@@ -644,7 +639,6 @@ extension Comparable {
   /// - Parameters:
   ///   - minimum: The lower bound for the range.
   ///   - maximum: The upper bound for the range.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public static func ..< (minimum: Self, maximum: Self) -> Range<Self> {
     _precondition(minimum <= maximum,
@@ -674,7 +668,6 @@ extension Comparable {
   ///     // Prints "[10, 20, 30]"
   ///
   /// - Parameter maximum: The upper bound for the range.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public static prefix func ..< (maximum: Self) -> PartialRangeUpTo<Self> {
     return PartialRangeUpTo(maximum)
@@ -702,7 +695,6 @@ extension Comparable {
   ///     // Prints "[10, 20, 30, 40]"
   ///
   /// - Parameter maximum: The upper bound for the range.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public static prefix func ... (maximum: Self) -> PartialRangeThrough<Self> {
     return PartialRangeThrough(maximum)
@@ -730,7 +722,6 @@ extension Comparable {
   ///     // Prints "[40, 50, 60, 70]"
   ///
   /// - Parameter minimum: The lower bound for the range.
-  @inlinable // FIXME(sil-serialize-all)
   @_transparent
   public static postfix func ... (minimum: Self) -> PartialRangeFrom<Self> {
     return PartialRangeFrom(minimum)

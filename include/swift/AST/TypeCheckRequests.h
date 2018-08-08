@@ -13,14 +13,15 @@
 //  This file defines type checking requests.
 //
 //===----------------------------------------------------------------------===//
-#ifndef SWIFT_SEMA_REQUESTS_H
-#define SWIFT_SEMA_REQUESTS_H
+#ifndef SWIFT_TYPE_CHECK_REQUESTS_H
+#define SWIFT_TYPE_CHECK_REQUESTS_H
 
 #include "swift/AST/Type.h"
 #include "swift/AST/Evaluator.h"
 #include "swift/AST/SimpleRequest.h"
 #include "swift/Basic/Statistic.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/TinyPtrVector.h"
 
 namespace swift {
 
@@ -121,12 +122,97 @@ public:
   void cacheResult(Type value) const;
 };
 
+/// Request to determine the set of declarations that were are overridden
+/// by the given declaration.
+class OverriddenDeclsRequest
+  : public SimpleRequest<OverriddenDeclsRequest,
+                         CacheKind::SeparatelyCached,
+                         llvm::TinyPtrVector<ValueDecl *>,
+                         ValueDecl *> {
+public:
+  using SimpleRequest::SimpleRequest;
+
+private:
+  friend class SimpleRequest;
+
+  // Evaluation.
+  llvm::TinyPtrVector<ValueDecl *> evaluate(Evaluator &evaluator,
+                                            ValueDecl *decl) const;
+
+public:
+  // Cycle handling
+  llvm::TinyPtrVector<ValueDecl *> breakCycle() const { return { }; }
+  void diagnoseCycle(DiagnosticEngine &diags) const;
+  void noteCycleStep(DiagnosticEngine &diags) const;
+
+  // Separate caching.
+  bool isCached() const { return true; }
+  Optional<llvm::TinyPtrVector<ValueDecl *>> getCachedResult() const;
+  void cacheResult(llvm::TinyPtrVector<ValueDecl *> value) const;
+};
+
+/// Determine whether the given declaration is exposed to Objective-C.
+class IsObjCRequest :
+    public SimpleRequest<IsObjCRequest,
+                         CacheKind::SeparatelyCached,
+                         bool,
+                         ValueDecl *> {
+public:
+  using SimpleRequest::SimpleRequest;
+
+private:
+  friend class SimpleRequest;
+
+  // Evaluation.
+  bool evaluate(Evaluator &evaluator, ValueDecl *decl) const;
+
+public:
+  // Cycle handling
+  bool breakCycle() const;
+  void diagnoseCycle(DiagnosticEngine &diags) const;
+  void noteCycleStep(DiagnosticEngine &diags) const;
+
+  // Separate caching.
+  bool isCached() const { return true; }
+  Optional<bool> getCachedResult() const;
+  void cacheResult(bool value) const;
+};
+
+/// Determine whether the given declaration is 'dynamic''.
+class IsDynamicRequest :
+    public SimpleRequest<IsDynamicRequest,
+                         CacheKind::SeparatelyCached,
+                         bool,
+                         ValueDecl *> {
+public:
+  using SimpleRequest::SimpleRequest;
+
+private:
+  friend class SimpleRequest;
+
+  // Evaluation.
+  bool evaluate(Evaluator &evaluator, ValueDecl *decl) const;
+
+public:
+  // Cycle handling
+  bool breakCycle() const;
+  void diagnoseCycle(DiagnosticEngine &diags) const;
+  void noteCycleStep(DiagnosticEngine &diags) const;
+
+  // Separate caching.
+  bool isCached() const { return true; }
+  Optional<bool> getCachedResult() const;
+  void cacheResult(bool value) const;
+};
+
 /// The zone number for the type checker.
 #define SWIFT_TYPE_CHECKER_REQUESTS_TYPEID_ZONE 10
 
 #define SWIFT_TYPEID_ZONE SWIFT_TYPE_CHECKER_REQUESTS_TYPEID_ZONE
 #define SWIFT_TYPEID_HEADER "swift/AST/TypeCheckerTypeIDZone.def"
 #include "swift/Basic/DefineTypeIDZone.h"
+#undef SWIFT_TYPEID_ZONE
+#undef SWIFT_TYPEID_HEADER
 
 // Set up reporting of evaluated requests.
 #define SWIFT_TYPEID(RequestType)                                \
@@ -140,4 +226,4 @@ inline void reportEvaluatedRequest(UnifiedStatsReporter &stats,  \
 
 } // end namespace swift
 
-#endif // SWIFT_SEMA_REQUESTS_H
+#endif // SWIFT_TYPE_CHECK_REQUESTS_H

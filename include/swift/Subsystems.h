@@ -61,6 +61,7 @@ namespace swift {
   class SILParserTUState;
   class SourceFile;
   class SourceManager;
+  class SyntaxParsingCache;
   class Token;
   class TopLevelContext;
   struct TypeLoc;
@@ -319,6 +320,11 @@ namespace swift {
                    StringRef OutputFilename,
                    UnifiedStatsReporter *Stats=nullptr);
 
+  /// Dump YAML describing all fixed-size types imported from the given module.
+  bool performDumpTypeInfo(IRGenOptions &Opts,
+                           SILModule &SILMod,
+                           llvm::LLVMContext &LLVMContext);
+
   /// Creates a TargetMachine from the IRGen opts and AST Context.
   std::unique_ptr<llvm::TargetMachine>
   createTargetMachine(IRGenOptions &Opts, ASTContext &Ctx);
@@ -327,7 +333,8 @@ namespace swift {
   class ParserUnit {
   public:
     ParserUnit(SourceManager &SM, unsigned BufferID,
-               const LangOptions &LangOpts, StringRef ModuleName);
+               const LangOptions &LangOpts, StringRef ModuleName,
+               SyntaxParsingCache *SyntaxCache = nullptr);
     ParserUnit(SourceManager &SM, unsigned BufferID);
     ParserUnit(SourceManager &SM, unsigned BufferID,
                unsigned Offset, unsigned EndOffset);
@@ -344,10 +351,21 @@ namespace swift {
     Implementation &Impl;
   };
 
-  /// Register the type checker's request functions with the evaluator.
+  /// Register AST-level request functions with the evaluator.
   ///
-  /// Clients that form an ASTContext and will perform any semantic
-  /// queries should call this function after forming the ASTContext.
+  /// The ASTContext will automatically call these upon construction.
+  void registerAccessRequestFunctions(Evaluator &evaluator);
+
+  /// Register AST-level request functions with the evaluator.
+  ///
+  /// The ASTContext will automatically call these upon construction.
+  void registerNameLookupRequestFunctions(Evaluator &evaluator);
+
+  /// Register Sema-level request functions with the evaluator.
+  ///
+  /// Clients that form an ASTContext and will perform any semantic queries
+  /// using Sema-level logic should call these functions after forming the
+  /// ASTContext.
   void registerTypeCheckerRequestFunctions(Evaluator &evaluator);
 
 } // end namespace swift

@@ -16,6 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "TypeChecker.h"
+#include "TypeCheckObjC.h"
 #include "swift/AST/ASTVisitor.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/Decl.h"
@@ -468,11 +469,10 @@ public:
 
       // Can default parameter initializers capture state?  That seems like
       // a really bad idea.
-      for (auto *paramList : AFD->getParameterLists())
-        for (auto param : *paramList) {
-          if (auto E = param->getDefaultValue())
-            E->walk(*this);
-        }
+      for (auto *param : *AFD->getParameters())
+        if (auto E = param->getDefaultValue())
+          E->walk(*this);
+
       return false;
     }
 

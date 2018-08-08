@@ -761,7 +761,7 @@ static int doREPLCodeCompletion(const CompilerInvocation &InitInvok,
     BufferText = BufferText.drop_back(1);
 
   CompilerInvocation Invocation(InitInvok);
-  Invocation.setInputKind(InputFileKind::IFK_Swift_REPL);
+  Invocation.setInputKind(InputFileKind::SwiftREPL);
 
   CompilerInstance CI;
 
@@ -984,6 +984,7 @@ static int doSyntaxColoring(const CompilerInvocation &InitInvok,
       break;
   }
   assert(SF && "no source file?");
+
   ide::SyntaxModelContext ColorContext(*SF);
   PrintSyntaxColorWalker ColorWalker(CI.getSourceMgr(), BufID, llvm::outs(),
                                      TerminalOutput);
@@ -2194,6 +2195,12 @@ public:
       case AccessorKind::MaterializeForSet:
         OS << "<materializeForSet for ";
         break;
+      case AccessorKind::Read:
+        OS << "<read accessor for ";
+        break;
+      case AccessorKind::Modify:
+        OS << "<modify accessor for ";
+        break;
       }
       printDeclName(storage);
       OS << ">";
@@ -3030,7 +3037,7 @@ int main(int argc, char *argv[]) {
   for (auto &File : options::InputFilenames)
     InitInvok.getFrontendOptions().InputsAndOutputs.addInputFile(File);
   if (!options::InputFilenames.empty())
-    InitInvok.setInputKind(InputFileKind::IFK_Swift_Library);
+    InitInvok.setInputKind(InputFileKind::SwiftLibrary);
 
   InitInvok.setMainExecutablePath(
       llvm::sys::fs::getMainExecutable(argv[0],

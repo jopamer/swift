@@ -16,6 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Callee.h"
+#include "ClassLayout.h"
 #include "ConstantBuilder.h"
 #include "Explosion.h"
 #include "GenClass.h"
@@ -46,10 +47,15 @@
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/Types.h"
+#include "swift/Basic/Statistic.h"
 #include "swift/IRGen/Linking.h"
 
 using namespace swift;
 using namespace irgen;
+
+#define DEBUG_TYPE "IRGen key paths"
+STATISTIC(NumTrivialPropertyDescriptors, "# of trivial property descriptors");
+STATISTIC(NumNonTrivialPropertyDescriptors, "# of nontrivial property descriptors");
 
 enum KeyPathAccessor {
   Getter,
@@ -477,9 +483,9 @@ getWitnessTableForComputedComponent(IRGenModule &IGM,
         auto sourceEnv = IGF.Builder.CreateInBoundsGEP(sourceArgsBuf, offset);
         auto destEnv = IGF.Builder.CreateInBoundsGEP(destArgsBuf, offset);
         
-        IGF.Builder.CreateMemCpy(destEnv, sourceEnv,
-          IGM.getPointerSize().getValue() * requirements.size(),
-          IGM.getPointerAlignment().getValue());
+        auto align = IGM.getPointerAlignment().getValue();
+        IGF.Builder.CreateMemCpy(destEnv, align, sourceEnv, align,
+          IGM.getPointerSize().getValue() * requirements.size());
       }
       
       IGF.Builder.CreateRetVoid();
@@ -623,8 +629,7 @@ getInitializerForComputedComponent(IRGenModule &IGM,
     // External components don't need to store the key path environment (and
     // can't), since they need to already have enough information to function
     // independently of any context using the component.
-    if (genericEnv &&
-        component.getKind() != KeyPathPatternComponent::Kind::External) {
+    if (genericEnv) {
       auto destGenericEnv = dest;
       if (!component.getSubscriptIndices().empty()) {
         auto genericEnvAlignMask = llvm::ConstantInt::get(IGM.SizeTy,
@@ -635,9 +640,9 @@ getInitializerForComputedComponent(IRGenModule &IGM,
         destGenericEnv = IGF.Builder.CreateInBoundsGEP(dest, offset);
       }
       
-      IGF.Builder.CreateMemCpy(destGenericEnv, src,
-                           IGM.getPointerSize().getValue() * requirements.size(),
-                           IGM.getPointerAlignment().getValue());
+      auto align = IGM.getPointerAlignment().getValue();
+      IGF.Builder.CreateMemCpy(destGenericEnv, align, src, align,
+                         IGM.getPointerSize().getValue() * requirements.size());
     }
     IGF.Builder.CreateRetVoid();
   }
@@ -724,6 +729,26 @@ emitWitnessTableGeneratorForKeyPath(IRGenModule &IGM,
     });
 }
 
+static unsigned getClassFieldIndex(ClassDecl *classDecl, VarDecl *property) {
+  SmallVector<ClassDecl *, 3> superclasses;
+  for (auto *superDecl = classDecl; superDecl != nullptr;
+       superDecl = classDecl->getSuperclassDecl()) {
+    superclasses.push_back(superDecl);
+  }
+
+  std::reverse(superclasses.begin(), superclasses.end());
+
+  unsigned index = 0;
+  for (auto *superDecl : superclasses) {
+    for (auto *other : superDecl->getStoredProperties()) {
+      if (other == property)
+        return index;
+      index++;
+    }
+  }
+
+  llvm_unreachable("Did not find stored property in class");
+}
 
 static void
 emitKeyPathComponent(IRGenModule &IGM,
@@ -745,75 +770,6 @@ emitKeyPathComponent(IRGenModule &IGM,
   loweredBaseTy = IGM.getLoweredType(AbstractionPattern::getOpaque(),
                                      baseTy->getWithoutSpecifierType());
   switch (auto kind = component.getKind()) {
-  case KeyPathPatternComponent::Kind::External: {
-    fields.addInt32(KeyPathComponentHeader::forExternalComponent().getData());
-    // Emit accessors for all of the external declaration's necessary
-    // bindings.
-    SmallVector<llvm::Constant*, 4> descriptorArgs;
-    auto componentSig = component.getExternalDecl()->getInnermostDeclContext()
-      ->getGenericSignatureOfContext();
-    auto subs = component.getExternalSubstitutions();
-    enumerateGenericSignatureRequirements(
-      componentSig->getCanonicalSignature(),
-      [&](GenericRequirement reqt) {
-        auto substType = reqt.TypeParameter.subst(subs)
-          ->getCanonicalType();
-        if (!reqt.Protocol) {
-          // Type requirement.
-          descriptorArgs.push_back(
-            emitMetadataGeneratorForKeyPath(IGM, substType,
-                                            genericEnv, requirements));
-        } else {
-          // Protocol requirement.
-          auto conformance = subs.lookupConformance(
-                       reqt.TypeParameter->getCanonicalType(), reqt.Protocol);
-          descriptorArgs.push_back(
-            emitWitnessTableGeneratorForKeyPath(IGM, substType,
-                                                *conformance,
-                                                genericEnv, requirements));
-        }
-      });
-    // If instantiable in-place, pad out the argument count here to ensure
-    // there's room enough to instantiate a settable computed property
-    // with two captured words in-place. The runtime instantiation of the
-    // external component will ignore the padding, and this will make in-place
-    // instantiation more likely to avoid needing an allocation.
-    unsigned argSize = descriptorArgs.size();
-    if (isInstantiableInPlace) {
-      argSize = std::max(argSize, 3u);
-    }
-    
-    fields.addInt32(argSize);
-    fields.add(IGM.getAddrOfPropertyDescriptor(component.getExternalDecl()));
-    
-    // Add an initializer function that copies generic arguments out of the
-    // pattern argument buffer into the instantiated object, along with the
-    // index equality/hash operations we have from our perspective, or null
-    // if there are no arguments.
-    if (component.getSubscriptIndices().empty()) {
-      fields.addInt(IGM.IntPtrTy, 0);
-      fields.addInt(IGM.IntPtrTy, 0);
-      fields.addInt(IGM.IntPtrTy, 0);
-    } else {
-      fields.add(getInitializerForComputedComponent(IGM, component,
-                                                    operands,
-                                                    genericEnv,
-                                                    requirements));
-      fields.add(IGM.getAddrOfSILFunction(component.getSubscriptIndexEquals(),
-                                          NotForDefinition));
-      fields.add(IGM.getAddrOfSILFunction(component.getSubscriptIndexHash(),
-                                          NotForDefinition));
-    }
-    
-    // Add the generic arguments for the external context.
-    for (auto arg : descriptorArgs)
-      fields.add(arg);
-    
-    // Add padding.
-    for (unsigned i = descriptorArgs.size(); i < argSize; ++i)
-      fields.addInt(IGM.IntPtrTy, 0);
-    break;
-  }
   case KeyPathPatternComponent::Kind::StoredProperty: {
     auto property = cast<VarDecl>(component.getStoredPropertyDecl());
     
@@ -907,6 +863,46 @@ emitKeyPathComponent(IRGenModule &IGM,
   }
   case KeyPathPatternComponent::Kind::GettableProperty:
   case KeyPathPatternComponent::Kind::SettableProperty: {
+    // If the component references an external property, encode that in a
+    // header before the local attempt header, so that we can consult the
+    // external descriptor at instantiation time.
+    if (auto externalDecl = component.getExternalDecl()) {
+      SmallVector<llvm::Constant *, 4> externalSubArgs;
+      auto componentSig = externalDecl->getInnermostDeclContext()
+        ->getGenericSignatureOfContext();
+      auto subs = component.getExternalSubstitutions();
+      if (!subs.empty()) {
+        enumerateGenericSignatureRequirements(
+          componentSig->getCanonicalSignature(),
+          [&](GenericRequirement reqt) {
+            auto substType = reqt.TypeParameter.subst(subs)
+              ->getCanonicalType();
+            if (!reqt.Protocol) {
+              // Type requirement.
+              externalSubArgs.push_back(
+                emitMetadataGeneratorForKeyPath(IGM, substType,
+                                                genericEnv, requirements));
+            } else {
+              // Protocol requirement.
+              auto conformance = subs.lookupConformance(
+                           reqt.TypeParameter->getCanonicalType(), reqt.Protocol);
+              externalSubArgs.push_back(
+                emitWitnessTableGeneratorForKeyPath(IGM, substType,
+                                                    *conformance,
+                                                    genericEnv, requirements));
+            }
+          });
+      }
+      fields.addInt32(
+        KeyPathComponentHeader::forExternalComponent(externalSubArgs.size())
+          .getData());
+      fields.addAlignmentPadding(IGM.getPointerAlignment());
+      auto descriptor = IGM.getAddrOfPropertyDescriptor(externalDecl);
+      fields.add(descriptor);
+      for (auto *arg : externalSubArgs)
+        fields.add(arg);
+    }
+  
     // Encode the settability.
     bool settable = kind == KeyPathPatternComponent::Kind::SettableProperty;
     KeyPathComponentHeader::ComputedPropertyKind componentKind;
@@ -941,23 +937,43 @@ emitKeyPathComponent(IRGenModule &IGM,
         idValue = IGM.getAddrOfObjCSelectorRef(declRef);
         idResolved = false;
       } else {
-        idKind = KeyPathComponentHeader::VTableOffset;
+        if (auto overridden = declRef.getOverriddenVTableEntry())
+          declRef = overridden;
+
         auto dc = declRef.getDecl()->getDeclContext();
+
+        // If the method context is resilient, use the dispatch thunk as a
+        // stable identifier for the storage.
+        if (IGM.isResilient(cast<NominalTypeDecl>(dc),
+                            ResilienceExpansion::Minimal)) {
+          idKind = KeyPathComponentHeader::Pointer;
+          idValue = IGM.getAddrOfDispatchThunk(declRef, NotForDefinition);
+          idResolved = true;
+          break;
+        }
+      
+        idKind = KeyPathComponentHeader::VTableOffset;
         if (isa<ClassDecl>(dc) && !cast<ClassDecl>(dc)->isForeign()) {
-          auto overridden = declRef.getOverriddenVTableEntry();
           auto declaringClass =
-            cast<ClassDecl>(overridden.getDecl()->getDeclContext());
+            cast<ClassDecl>(declRef.getDecl()->getDeclContext());
           auto &metadataLayout = IGM.getClassMetadataLayout(declaringClass);
-          // FIXME: Resilience. We don't want vtable layout to be ABI, so this
-          // should be encoded as a reference to the method dispatch thunk
-          // instead.
-          auto offset = metadataLayout.getStaticMethodOffset(overridden);
+
+          // For a class method, we don't necessarily need the absolute offset,
+          // only an offset that's unique to this method. For a class with
+          // resilient ancestry, all of the superclass methods will be
+          // identified by their dispatch thunk (see above), so we can use
+          // relative offsets from the dynamic base offset to identify the local
+          // class's own methods.
+          auto methodInfo = metadataLayout.getMethodOffsetInfo(declRef);
+          Size offset;
+          if (methodInfo.isStatic())
+            offset = methodInfo.getStaticOffset();
+          else
+            offset = methodInfo.getRelativeOffset();
+
           idValue = llvm::ConstantInt::get(IGM.SizeTy, offset.getValue());
           idResolved = true;
         } else if (auto methodProto = dyn_cast<ProtocolDecl>(dc)) {
-          // FIXME: Resilience. We don't want witness table layout to be ABI,
-          // so this should be encoded as a reference to the method dispatch
-          // thunk instead.
           auto &protoInfo = IGM.getProtocolInfo(methodProto);
           auto index = protoInfo.getFunctionIndex(
                                cast<AbstractFunctionDecl>(declRef.getDecl()));
@@ -990,7 +1006,7 @@ emitKeyPathComponent(IRGenModule &IGM,
         }
         assert(structIdx && "not a stored property of the struct?!");
         idValue = llvm::ConstantInt::get(IGM.SizeTy, structIdx.getValue());
-      } else if (baseTy->getClassOrBoundGenericClass()) {
+      } else if (auto *classDecl = baseTy->getClassOrBoundGenericClass()) {
         // TODO: This field index would require runtime resolution with Swift
         // native class resilience. We never directly access ObjC-imported
         // ivars so we can disregard ObjC ivar resilience for this computation
@@ -1001,8 +1017,7 @@ emitKeyPathComponent(IRGenModule &IGM,
         case FieldAccess::NonConstantDirect:
           idResolved = true;
           idValue = llvm::ConstantInt::get(IGM.SizeTy,
-            getClassFieldIndex(IGM,
-                         SILType::getPrimitiveAddressType(baseTy), property));
+                                       getClassFieldIndex(classDecl, property));
           break;
         }
         
@@ -1162,7 +1177,6 @@ IRGenModule::getAddrOfKeyPathPattern(KeyPathPattern *pattern,
     switch (component.getKind()) {
     case KeyPathPatternComponent::Kind::GettableProperty:
     case KeyPathPatternComponent::Kind::SettableProperty:
-    case KeyPathPatternComponent::Kind::External:
       for (auto &index : component.getSubscriptIndices()) {
         operands[index.Operand].LoweredType = index.LoweredType;
         operands[index.Operand].LastUser = &component;
@@ -1219,6 +1233,7 @@ IRGenModule::getAddrOfKeyPathPattern(KeyPathPattern *pattern,
 
 void IRGenModule::emitSILProperty(SILProperty *prop) {
   if (prop->isTrivial()) {
+    ++NumTrivialPropertyDescriptors;
     // All trivial property descriptors can share a single definition in the
     // translation unit.
     if (!TheTrivialPropertyDescriptor) {
@@ -1244,6 +1259,8 @@ void IRGenModule::emitSILProperty(SILProperty *prop) {
     }
     return;
   }
+
+  ++NumNonTrivialPropertyDescriptors;
 
   ConstantInitBuilder builder(*this);
   ConstantStructBuilder fields = builder.beginStruct();

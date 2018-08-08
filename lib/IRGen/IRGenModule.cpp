@@ -179,13 +179,11 @@ IRGenModule::IRGenModule(IRGenerator &irgen,
   RefCountedPtrTy = RefCountedStructTy->getPointerTo(/*addrspace*/ 0);
   RefCountedNull = llvm::ConstantPointerNull::get(RefCountedPtrTy);
 
-  // For now, native weak references are just a pointer.
-  WeakReferencePtrTy =
-    createStructPointerType(*this, "swift.weak", { RefCountedPtrTy });
-
-  // Native unowned references are just a pointer.
-  UnownedReferencePtrTy =
-    createStructPointerType(*this, "swift.unowned", { RefCountedPtrTy });
+  // For now, references storage types are just pointers.
+#define CHECKED_REF_STORAGE(Name, name, ...) \
+  Name##ReferencePtrTy = \
+    createStructPointerType(*this, "swift." #name, { RefCountedPtrTy });
+#include "swift/AST/ReferenceStorage.def"
 
   // A type metadata record is the structure pointed to by the canonical
   // address point of a type metadata.  This is at least one word, and
@@ -199,6 +197,16 @@ IRGenModule::IRGenModule(IRGenerator &irgen,
   TypeMetadataResponseTy = createStructType(*this, "swift.metadata_response", {
     TypeMetadataPtrTy,
     SizeTy
+  });
+
+  OffsetPairTy = llvm::StructType::get(getLLVMContext(), { SizeTy, SizeTy });
+
+  // The TypeLayout structure, including all possible trailing components.
+  FullTypeLayoutTy = createStructType(*this, "swift.full_type_layout", {
+    SizeTy, // size
+    SizeTy, // flags
+    SizeTy, // alignment
+    SizeTy  // extra inhabitant flags (optional)
   });
 
   // A protocol descriptor describes a protocol. It is not type metadata in
